@@ -12,6 +12,7 @@ categories = ["network-programming"]
 [features]
 default = []
 tls = ["tokio-rustls", "rustls-pemfile"]
+pprof = ["dep:pprof"]
 
 [dependencies]
 # Async runtime - required for high-performance I/O
@@ -64,6 +65,9 @@ prometheus = "0.13"
 hyper = { version = "1.4", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
+
+# Profiling (optional)
+pprof = { version = "0.14", features = ["flamegraph", "prost-codec"], optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

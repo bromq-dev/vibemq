@@ -348,6 +348,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("  Metrics: disabled");
     }
 
+    // Start profiling server if feature is enabled
+    #[cfg(feature = "pprof")]
+    {
+        let pprof_addr: std::net::SocketAddr = vibemq::profiling::DEFAULT_BIND.parse().unwrap();
+        info!("  Profiling: enabled (http://{})", pprof_addr);
+        tokio::spawn(async move {
+            if let Err(e) = vibemq::profiling::start_server(pprof_addr).await {
+                tracing::error!("Profiling server error: {}", e);
+            }
+        });
+    }
+
     // Run the broker (it handles Ctrl+C internally via the shutdown signal)
     broker.run().await?;
 

@@ -12,6 +12,8 @@ pub mod codec;
 pub mod config;
 pub mod hooks;
 pub mod metrics;
+#[cfg(feature = "pprof")]
+pub mod profiling;
 pub mod protocol;
 pub mod remote;
 pub mod session;
