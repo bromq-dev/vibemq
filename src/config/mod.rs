@@ -21,7 +21,15 @@ use serde::Deserialize;
 // Re-export bridge config types
 pub use bridge::{BridgeConfig, BridgeProtocol, BridgeTlsConfig, ForwardDirection, ForwardRule, LoopPrevention};
 
+// Re-export cluster config types
+pub use cluster::ClusterConfig;
+
+// Re-export metrics config types
+pub use metrics::MetricsConfig;
+
 mod bridge;
+mod cluster;
+mod metrics;
 
 /// Substitute environment variables in a string.
 /// Supports `${VAR}` and `${VAR:-default}` syntax.
@@ -103,6 +111,12 @@ pub struct Config {
     /// Bridge configurations
     #[serde(default)]
     pub bridge: Vec<BridgeConfig>,
+    /// Cluster configuration (only first entry is used if multiple)
+    #[serde(default)]
+    pub cluster: Vec<ClusterConfig>,
+    /// Metrics configuration
+    #[serde(default)]
+    pub metrics: MetricsConfig,
 }
 
 impl Default for Config {
@@ -116,6 +130,8 @@ impl Default for Config {
             auth: AuthConfig::default(),
             acl: AclConfig::default(),
             bridge: Vec::new(),
+            cluster: Vec::new(),
+            metrics: MetricsConfig::default(),
         }
     }
 }

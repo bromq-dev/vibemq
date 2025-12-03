@@ -1128,6 +1128,12 @@ where
                 QoS::ExactlyOnce => ReasonCode::GrantedQoS2,
             });
 
+            // Emit subscription event for cluster synchronization
+            let _ = self.events.send(BrokerEvent::SubscriptionAdded {
+                filter: sub.filter.clone(),
+                client_id: client_id.clone(),
+            });
+
             debug!(
                 "SUBSCRIBE {} to {} (QoS {:?})",
                 client_id, sub.filter, granted_qos
@@ -1265,6 +1271,14 @@ where
                     ReasonCode::Success
                 } else {
                     ReasonCode::NoSubscriptionExisted
+                });
+            }
+
+            // Emit unsubscription event for cluster synchronization
+            if removed {
+                let _ = self.events.send(BrokerEvent::SubscriptionRemoved {
+                    filter: filter.clone(),
+                    client_id: client_id.clone(),
                 });
             }
 

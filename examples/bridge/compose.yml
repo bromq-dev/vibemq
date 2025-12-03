@@ -10,7 +10,6 @@ services:
     image: ghcr.io/bromq-dev/vibemq:latest
     build:
       context: ../..
-    command: ["--config", "/etc/vibemq/config.toml"]
     ports:
       - 1884:1883
     volumes:

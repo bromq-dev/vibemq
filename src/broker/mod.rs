@@ -21,7 +21,9 @@ use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, error, info, warn};
 
 use crate::bridge::BridgeManager;
+use crate::cluster::ClusterManager;
 use crate::hooks::{DefaultHooks, Hooks};
+use crate::metrics::Metrics;
 use crate::protocol::{Packet, Properties, ProtocolVersion, Publish, QoS};
 use crate::session::SessionStore;
 use crate::topic::SubscriptionStore;
@@ -123,6 +125,16 @@ pub enum BrokerEvent {
         qos: QoS,
         retain: bool,
     },
+    /// Subscription added (for cluster synchronization)
+    SubscriptionAdded {
+        filter: String,
+        client_id: Arc<str>,
+    },
+    /// Subscription removed (for cluster synchronization)
+    SubscriptionRemoved {
+        filter: String,
+        client_id: Arc<str>,
+    },
 }
 
 /// The MQTT Broker
@@ -145,6 +157,10 @@ pub struct Broker {
     hooks: Arc<dyn Hooks>,
     /// Bridge manager for remote broker connections
     bridge_manager: Option<Arc<BridgeManager>>,
+    /// Cluster manager for horizontal scaling
+    cluster_manager: Option<Arc<ClusterManager>>,
+    /// Metrics for observability
+    metrics: Option<Arc<Metrics>>,
 }
 
 impl Broker {
@@ -168,12 +184,118 @@ impl Broker {
             events,
             hooks,
             bridge_manager: None,
+            cluster_manager: None,
+            metrics: None,
         }
+    }
+
+    /// Set metrics for this broker
+    pub fn set_metrics(&mut self, metrics: Arc<Metrics>) {
+        self.metrics = Some(metrics);
+    }
+
+    /// Get metrics (if enabled)
+    pub fn metrics(&self) -> Option<&Arc<Metrics>> {
+        self.metrics.as_ref()
     }
 
     /// Set the bridge manager for this broker
     pub fn set_bridge_manager(&mut self, manager: BridgeManager) {
         self.bridge_manager = Some(Arc::new(manager));
+    }
+
+    /// Set the cluster manager for this broker
+    pub fn set_cluster_manager(&mut self, manager: ClusterManager) {
+        self.cluster_manager = Some(Arc::new(manager));
+    }
+
+    /// Create a cluster manager with inbound callback that publishes to this broker
+    pub async fn create_cluster_manager(
+        &self,
+        config: crate::config::ClusterConfig,
+    ) -> Result<ClusterManager, Box<dyn std::error::Error + Send + Sync>> {
+        let retained = self.retained.clone();
+        let sessions = self.sessions.clone();
+        let subscriptions = self.subscriptions.clone();
+        let connections = self.connections.clone();
+
+        // Callback for messages received from cluster peers
+        let inbound_callback = Arc::new(
+            move |topic: String, payload: Bytes, qos: QoS, retain: bool, _origin_node: String| {
+                debug!("Cluster inbound_callback: routing '{}' to local subscribers", topic);
+
+                // Create a publish packet
+                let publish = Publish {
+                    dup: false,
+                    qos,
+                    retain,
+                    topic: topic.clone(),
+                    packet_id: None,
+                    payload: payload.clone(),
+                    properties: Properties::default(),
+                };
+
+                // Handle retained message
+                if retain {
+                    if payload.is_empty() {
+                        retained.remove(&topic);
+                    } else {
+                        retained.insert(
+                            topic.clone(),
+                            RetainedMessage {
+                                topic: topic.clone(),
+                                payload,
+                                qos,
+                                properties: Properties::default(),
+                                timestamp: Instant::now(),
+                            },
+                        );
+                    }
+                }
+
+                // Route to local subscribers only
+                let matches = subscriptions.matches(&topic);
+
+                // Deduplicate by client_id (keep highest QoS)
+                let mut client_qos: HashMap<Arc<str>, QoS> = HashMap::new();
+                for sub in matches {
+                    let entry = client_qos
+                        .entry(sub.client_id.clone())
+                        .or_insert(QoS::AtMostOnce);
+                    if sub.qos > *entry {
+                        *entry = sub.qos;
+                    }
+                }
+
+                debug!("Cluster inbound_callback: found {} local subscribers for '{}'", client_qos.len(), topic);
+
+                // Send to each local client
+                for (client_id, sub_qos) in client_qos {
+                    let effective_qos = qos.min(sub_qos);
+
+                    if let Some(sender) = connections.get(&client_id) {
+                        let mut publish = publish.clone();
+                        publish.qos = effective_qos;
+                        match sender.try_send(Packet::Publish(publish)) {
+                            Ok(()) => debug!("Cluster inbound_callback: sent to client {}", client_id),
+                            Err(e) => debug!("Cluster inbound_callback: failed to send to {}: {:?}", client_id, e),
+                        }
+                    } else {
+                        // Client disconnected, queue message if persistent session
+                        if let Some(session) = sessions.get(client_id.as_ref()) {
+                            let mut s = session.write();
+                            if !s.clean_start {
+                                let mut publish = publish.clone();
+                                publish.qos = effective_qos;
+                                s.queue_message(publish);
+                            }
+                        }
+                    }
+                }
+            },
+        );
+
+        ClusterManager::new(config, inbound_callback).await
     }
 
     /// Create a bridge manager with inbound callback that publishes to this broker
@@ -407,6 +529,122 @@ impl Broker {
                                 }
                                 Err(broadcast::error::RecvError::Lagged(_)) => continue,
                                 Err(broadcast::error::RecvError::Closed) => break,
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Spawn cluster forwarding task if clustering is enabled
+        if let Some(ref cluster_manager) = self.cluster_manager {
+            let cluster_manager = cluster_manager.clone();
+            let mut events_rx = self.events.subscribe();
+            let mut shutdown_rx = self.shutdown.subscribe();
+
+            info!(
+                "Starting cluster manager (node_id={}, peers={})",
+                cluster_manager.node_id(),
+                cluster_manager.peer_count()
+            );
+
+            // Start cluster manager
+            if let Err(e) = cluster_manager.start().await {
+                error!("Failed to start cluster manager: {}", e);
+            }
+
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        biased;
+
+                        result = events_rx.recv() => {
+                            match result {
+                                Ok(BrokerEvent::MessagePublished { topic, payload, qos, retain }) => {
+                                    // Forward to cluster peers
+                                    debug!("Cluster: forwarding publish to topic '{}' (peers={})", topic, cluster_manager.peer_count());
+                                    cluster_manager.forward_publish(&topic, payload, qos, retain).await;
+                                }
+                                Ok(BrokerEvent::SubscriptionAdded { filter, client_id }) => {
+                                    // Update cluster subscription state
+                                    debug!("Cluster: subscription added '{}' by {}", filter, client_id);
+                                    cluster_manager.add_subscription(filter).await;
+                                }
+                                Ok(BrokerEvent::SubscriptionRemoved { filter, client_id }) => {
+                                    // Update cluster subscription state
+                                    debug!("Cluster: subscription removed '{}' by {}", filter, client_id);
+                                    cluster_manager.remove_subscription(&filter).await;
+                                }
+                                Ok(_) => {} // Ignore other events
+                                Err(broadcast::error::RecvError::Lagged(n)) => {
+                                    warn!("Cluster event listener lagged, missed {} events", n);
+                                }
+                                Err(broadcast::error::RecvError::Closed) => break,
+                            }
+                        }
+                        result = shutdown_rx.recv() => {
+                            match result {
+                                Ok(()) => {
+                                    info!("Stopping cluster manager");
+                                    cluster_manager.stop().await;
+                                    break;
+                                }
+                                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                                Err(broadcast::error::RecvError::Closed) => break,
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Spawn metrics collection task if metrics are enabled
+        if let Some(ref metrics) = self.metrics {
+            let metrics = metrics.clone();
+            let mut events_rx = self.events.subscribe();
+            let mut shutdown_rx = self.shutdown.subscribe();
+
+            info!("Starting metrics collection");
+
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        biased;
+
+                        result = events_rx.recv() => {
+                            match result {
+                                Ok(BrokerEvent::ClientConnected { protocol_version, .. }) => {
+                                    let protocol = match protocol_version {
+                                        ProtocolVersion::V311 => "v3.1.1",
+                                        ProtocolVersion::V5 => "v5.0",
+                                    };
+                                    metrics.client_connected(protocol);
+                                }
+                                Ok(BrokerEvent::ClientDisconnected { .. }) => {
+                                    // Note: We don't know the protocol here, so we just decrement total
+                                    // In a more complete impl, we'd track protocol per client
+                                    metrics.connections_current.dec();
+                                }
+                                Ok(BrokerEvent::MessagePublished { payload, .. }) => {
+                                    metrics.messages_received_total.with_label_values(&["publish"]).inc();
+                                    metrics.messages_bytes_received.inc_by(payload.len() as u64);
+                                }
+                                Ok(BrokerEvent::SubscriptionAdded { .. }) => {
+                                    metrics.subscription_added();
+                                }
+                                Ok(BrokerEvent::SubscriptionRemoved { .. }) => {
+                                    metrics.subscription_removed();
+                                }
+                                Err(broadcast::error::RecvError::Lagged(n)) => {
+                                    warn!("Metrics event listener lagged, missed {} events", n);
+                                }
+                                Err(broadcast::error::RecvError::Closed) => break,
+                            }
+                        }
+                        result = shutdown_rx.recv() => {
+                            match result {
+                                Ok(()) | Err(broadcast::error::RecvError::Closed) => break,
+                                Err(broadcast::error::RecvError::Lagged(_)) => continue,
                             }
                         }
                     }

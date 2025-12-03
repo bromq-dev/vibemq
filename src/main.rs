@@ -306,6 +306,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         broker.set_bridge_manager(bridge_manager);
     }
 
+    // Setup clustering if configured
+    let enabled_clusters = file_config.cluster.iter().filter(|c| c.enabled).count();
+    if enabled_clusters > 0 {
+        let cluster_cfg = &file_config.cluster[0]; // Only first cluster config is used
+        info!(
+            "  Cluster: enabled (gossip={}, peer={})",
+            cluster_cfg.gossip_addr, cluster_cfg.peer_addr
+        );
+        if !cluster_cfg.seeds.is_empty() {
+            info!("    Seeds: {}", cluster_cfg.seeds.join(", "));
+        }
+
+        match broker.create_cluster_manager(cluster_cfg.clone()).await {
+            Ok(cluster_manager) => {
+                broker.set_cluster_manager(cluster_manager);
+            }
+            Err(e) => {
+                eprintln!("Error initializing cluster: {}", e);
+                std::process::exit(1);
+            }
+        }
+    } else {
+        info!("  Cluster: disabled");
+    }
+
+    // Setup metrics if configured
+    if file_config.metrics.enabled {
+        let metrics = Arc::new(vibemq::Metrics::new());
+        broker.set_metrics(metrics.clone());
+        info!("  Metrics: enabled (http://{})", file_config.metrics.bind);
+
+        // Spawn metrics server
+        let metrics_server = vibemq::MetricsServer::new(metrics, file_config.metrics.bind);
+        tokio::spawn(async move {
+            if let Err(e) = metrics_server.run().await {
+                tracing::error!("Metrics server error: {}", e);
+            }
+        });
+    } else {
+        info!("  Metrics: disabled");
+    }
+
     // Run the broker (it handles Ctrl+C internally via the shutdown signal)
     broker.run().await?;
 
