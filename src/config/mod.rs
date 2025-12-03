@@ -6,6 +6,7 @@
 //! - Session parameters
 //! - MQTT feature flags
 //! - Authentication and ACL
+//! - Bridge configuration
 //! - Environment variable overrides (VIBEMQ_* prefix)
 
 use std::collections::HashMap;
@@ -16,6 +17,11 @@ use std::time::Duration;
 use config::{Environment, File, FileFormat};
 use regex::Regex;
 use serde::Deserialize;
+
+// Re-export bridge config types
+pub use bridge::{BridgeConfig, BridgeProtocol, BridgeTlsConfig, ForwardDirection, ForwardRule, LoopPrevention};
+
+mod bridge;
 
 /// Substitute environment variables in a string.
 /// Supports `${VAR}` and `${VAR:-default}` syntax.
@@ -94,6 +100,9 @@ pub struct Config {
     pub auth: AuthConfig,
     /// ACL configuration
     pub acl: AclConfig,
+    /// Bridge configurations
+    #[serde(default)]
+    pub bridge: Vec<BridgeConfig>,
 }
 
 impl Default for Config {
@@ -106,6 +115,7 @@ impl Default for Config {
             mqtt: MqttConfig::default(),
             auth: AuthConfig::default(),
             acl: AclConfig::default(),
+            bridge: Vec::new(),
         }
     }
 }
@@ -417,12 +427,17 @@ impl Config {
             .set_default("auth.allow_anonymous", true)?
             .set_default("acl.enabled", false)?;
 
-        // Load from file if it exists, with env var substitution
+        // Load from file with env var substitution
         let path = path.as_ref();
-        if path.exists() {
-            let content = std::fs::read_to_string(path)?;
-            let substituted = substitute_env_vars(&content);
-            builder = builder.add_source(File::from_str(&substituted, FileFormat::Toml));
+        match std::fs::read_to_string(path) {
+            Ok(content) => {
+                let substituted = substitute_env_vars(&content);
+                builder = builder.add_source(File::from_str(&substituted, FileFormat::Toml));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // File doesn't exist, use defaults
+            }
+            Err(e) => return Err(ConfigError::Io(e)),
         }
 
         // Override with environment variables (VIBEMQ_SERVER_BIND, etc.)

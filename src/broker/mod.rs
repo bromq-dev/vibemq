@@ -18,8 +18,9 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
+use crate::bridge::BridgeManager;
 use crate::hooks::{DefaultHooks, Hooks};
 use crate::protocol::{Packet, Properties, ProtocolVersion, Publish, QoS};
 use crate::session::SessionStore;
@@ -115,8 +116,13 @@ pub enum BrokerEvent {
     },
     /// Client disconnected
     ClientDisconnected { client_id: Arc<str> },
-    /// Message published
-    MessagePublished { topic: String, qos: QoS },
+    /// Message published (includes payload for bridge forwarding)
+    MessagePublished {
+        topic: String,
+        payload: Bytes,
+        qos: QoS,
+        retain: bool,
+    },
 }
 
 /// The MQTT Broker
@@ -137,6 +143,8 @@ pub struct Broker {
     events: broadcast::Sender<BrokerEvent>,
     /// Hooks for auth/ACL and events
     hooks: Arc<dyn Hooks>,
+    /// Bridge manager for remote broker connections
+    bridge_manager: Option<Arc<BridgeManager>>,
 }
 
 impl Broker {
@@ -159,7 +167,89 @@ impl Broker {
             shutdown,
             events,
             hooks,
+            bridge_manager: None,
         }
+    }
+
+    /// Set the bridge manager for this broker
+    pub fn set_bridge_manager(&mut self, manager: BridgeManager) {
+        self.bridge_manager = Some(Arc::new(manager));
+    }
+
+    /// Create a bridge manager with inbound callback that publishes to this broker
+    pub fn create_bridge_manager(&self, configs: Vec<crate::bridge::BridgeConfig>) -> BridgeManager {
+        let retained = self.retained.clone();
+        let sessions = self.sessions.clone();
+        let subscriptions = self.subscriptions.clone();
+        let connections = self.connections.clone();
+
+        let inbound_callback = Arc::new(move |topic: String, payload: Bytes, qos: QoS, retain: bool| {
+            // Create a publish packet
+            let publish = Publish {
+                dup: false,
+                qos,
+                retain,
+                topic: topic.clone(),
+                packet_id: None,
+                payload: payload.clone(),
+                properties: Properties::default(),
+            };
+
+            // Handle retained message
+            if retain {
+                if payload.is_empty() {
+                    retained.remove(&topic);
+                } else {
+                    retained.insert(
+                        topic.clone(),
+                        RetainedMessage {
+                            topic: topic.clone(),
+                            payload,
+                            qos,
+                            properties: Properties::default(),
+                            timestamp: Instant::now(),
+                        },
+                    );
+                }
+            }
+
+            // Route to subscribers
+            let matches = subscriptions.matches(&topic);
+
+            // Deduplicate by client_id (keep highest QoS)
+            let mut client_qos: HashMap<Arc<str>, QoS> = HashMap::new();
+            for sub in matches {
+                let entry = client_qos
+                    .entry(sub.client_id.clone())
+                    .or_insert(QoS::AtMostOnce);
+                if sub.qos > *entry {
+                    *entry = sub.qos;
+                }
+            }
+
+            // Send to each client
+            for (client_id, sub_qos) in client_qos {
+                let effective_qos = qos.min(sub_qos);
+
+                if let Some(sender) = connections.get(&client_id) {
+                    let mut publish = publish.clone();
+                    publish.qos = effective_qos;
+                    let _ = sender.try_send(Packet::Publish(publish));
+                } else {
+                    // Client disconnected, queue message if persistent session
+                    if let Some(session) = sessions.get(client_id.as_ref()) {
+                        let mut s = session.write();
+                        if !s.clean_start {
+                            let mut publish = publish.clone();
+                            publish.qos = effective_qos;
+                            s.queue_message(publish);
+                        }
+                    }
+                }
+            }
+        });
+
+        BridgeManager::from_configs(configs, inbound_callback)
     }
 
     /// Run the broker
@@ -275,6 +365,54 @@ impl Broker {
                 }
             }
         });
+
+        // Spawn bridge forwarding task if bridges are configured
+        if let Some(ref bridge_manager) = self.bridge_manager {
+            let bridge_manager = bridge_manager.clone();
+            let mut events_rx = self.events.subscribe();
+            let mut shutdown_rx = self.shutdown.subscribe();
+
+            info!(
+                "Starting bridge manager with {} bridge(s)",
+                bridge_manager.bridge_count()
+            );
+
+            tokio::spawn(async move {
+                // Start all bridges
+                bridge_manager.start_all().await;
+
+                loop {
+                    tokio::select! {
+                        biased;
+
+                        result = events_rx.recv() => {
+                            match result {
+                                Ok(BrokerEvent::MessagePublished { topic, payload, qos, retain }) => {
+                                    // Forward to bridges
+                                    bridge_manager.forward_publish(&topic, payload, qos, retain).await;
+                                }
+                                Ok(_) => {} // Ignore other events
+                                Err(broadcast::error::RecvError::Lagged(n)) => {
+                                    warn!("Bridge event listener lagged, missed {} events", n);
+                                }
+                                Err(broadcast::error::RecvError::Closed) => break,
+                            }
+                        }
+                        result = shutdown_rx.recv() => {
+                            match result {
+                                Ok(()) => {
+                                    info!("Stopping bridges");
+                                    bridge_manager.stop_all().await;
+                                    break;
+                                }
+                                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                                Err(broadcast::error::RecvError::Closed) => break,
+                            }
+                        }
+                    }
+                }
+            });
+        }
 
         debug!("Starting TCP accept loop");
         loop {

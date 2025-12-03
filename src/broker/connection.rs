@@ -912,10 +912,12 @@ where
             }
         }
 
-        // Notify event subscribers
+        // Notify event subscribers (for bridge forwarding and monitoring)
         let _ = self.events.send(BrokerEvent::MessagePublished {
             topic: publish.topic.clone(),
+            payload: publish.payload.clone(),
             qos: publish.qos,
+            retain: publish.retain,
         });
 
         Ok(())

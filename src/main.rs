@@ -268,8 +268,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Compose hooks: auth first, then ACL
     let hooks = Arc::new(CompositeHooks::new().with(auth_provider).with(acl_provider));
 
-    // Create and run broker with hooks
-    let broker = Broker::with_hooks(broker_config, hooks);
+    // Create broker with hooks
+    let mut broker = Broker::with_hooks(broker_config, hooks);
+
+    // Setup bridges if configured
+    let enabled_bridges = file_config.bridge.iter().filter(|b| b.enabled).count();
+    info!(
+        "  Bridges: {} configured ({} enabled)",
+        file_config.bridge.len(),
+        enabled_bridges
+    );
+    if !file_config.bridge.is_empty() {
+        for bridge_cfg in &file_config.bridge {
+            let status = if bridge_cfg.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            };
+            info!(
+                "    - {} -> {} ({}) [{}]",
+                bridge_cfg.name, bridge_cfg.address, bridge_cfg.protocol, status
+            );
+            // Show forward rules
+            for rule in &bridge_cfg.forwards {
+                let direction = match rule.direction {
+                    vibemq::bridge::ForwardDirection::Out => "->",
+                    vibemq::bridge::ForwardDirection::In => "<-",
+                    vibemq::bridge::ForwardDirection::Both => "<->",
+                };
+                info!(
+                    "      {} {} {} (qos={}, retain={})",
+                    rule.local_topic, direction, rule.remote_topic, rule.qos, rule.retain
+                );
+            }
+        }
+        let bridge_manager = broker.create_bridge_manager(file_config.bridge);
+        broker.set_bridge_manager(bridge_manager);
+    }
 
     // Run the broker (it handles Ctrl+C internally via the shutdown signal)
     broker.run().await?;

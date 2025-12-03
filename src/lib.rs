@@ -5,18 +5,22 @@
 
 pub mod acl;
 pub mod auth;
+pub mod bridge;
 pub mod broker;
 pub mod codec;
 pub mod config;
 pub mod hooks;
 pub mod protocol;
+pub mod remote;
 pub mod session;
 pub mod topic;
 pub mod transport;
 
 pub use acl::AclProvider;
 pub use auth::AuthProvider;
+pub use bridge::{BridgeClient, BridgeConfig, BridgeManager};
 pub use broker::Broker;
 pub use config::Config;
 pub use hooks::{CompositeHooks, DefaultHooks, Hooks};
 pub use protocol::{ProtocolVersion, QoS};
+pub use remote::{RemoteError, RemotePeer, RemotePeerStatus};

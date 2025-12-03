@@ -250,3 +250,76 @@ password = "pass2"
     assert!(user_map.contains_key("bob"));
     assert_eq!(user_map.get("alice").unwrap().password, "pass1");
 }
+
+#[test]
+fn test_parse_bridge_config() {
+    let toml = r##"
+[auth]
+allow_anonymous = true
+
+[[bridge]]
+name = "node1"
+address = "node1:1883"
+protocol = "mqtt"
+client_id = "node2-bridge"
+enabled = true
+loop_prevention = "no_local"
+
+[[bridge.forwards]]
+local_topic = "#"
+remote_topic = "#"
+direction = "both"
+retain = true
+qos = 1
+"##;
+
+    let config = Config::from_str(toml).unwrap();
+    assert_eq!(config.bridge.len(), 1);
+    assert_eq!(config.bridge[0].name, "node1");
+    assert_eq!(config.bridge[0].address, "node1:1883");
+    assert!(config.bridge[0].enabled);
+    assert_eq!(config.bridge[0].forwards.len(), 1);
+    assert_eq!(config.bridge[0].forwards[0].local_topic, "#");
+}
+
+#[test]
+fn test_load_bridge_config_from_file() {
+    let temp_dir = std::env::temp_dir();
+    let config_path = temp_dir.join("vibemq_bridge_test.toml");
+
+    let config_content = r##"
+[auth]
+allow_anonymous = true
+
+[[bridge]]
+name = "test-bridge"
+address = "remote:1883"
+protocol = "mqtt"
+client_id = "bridge-client"
+enabled = true
+loop_prevention = "no_local"
+
+[[bridge.forwards]]
+local_topic = "#"
+remote_topic = "#"
+direction = "both"
+retain = true
+qos = 1
+"##;
+
+    std::fs::write(&config_path, config_content).unwrap();
+
+    let config = Config::load(&config_path).unwrap();
+
+    // Debug: print what we got
+    eprintln!("Bridges loaded: {}", config.bridge.len());
+    for b in &config.bridge {
+        eprintln!("  Bridge: {} -> {} ({} forwards)", b.name, b.address, b.forwards.len());
+    }
+
+    assert_eq!(config.bridge.len(), 1, "Expected 1 bridge but got {}", config.bridge.len());
+    assert_eq!(config.bridge[0].name, "test-bridge");
+    assert_eq!(config.bridge[0].forwards.len(), 1);
+
+    std::fs::remove_file(&config_path).ok();
+}

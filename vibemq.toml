@@ -107,3 +107,41 @@ enabled = false
 [acl.default]
 publish = []
 subscribe = ["public/#", "$SYS/broker/+"]
+
+# Bridge configuration
+# Bridges forward messages between this broker and remote MQTT brokers
+#
+# [[bridge]]
+# name = "cloud"                          # Unique bridge identifier
+# address = "cloud.example.com:8883"      # Remote broker address
+# protocol = "mqtts"                       # mqtt, mqtts, ws, wss
+# client_id = "edge-bridge-01"            # Client ID for remote connection
+# username = "bridge"                     # Optional authentication
+# password = "secret"
+# keepalive = 60                          # Keep alive interval (seconds)
+# clean_start = true                      # Start with clean session
+# reconnect_interval = 5                  # Initial reconnect delay (seconds)
+# max_reconnect_interval = 60             # Maximum reconnect delay (seconds)
+# enabled = true                          # Enable/disable this bridge
+#
+# # Loop prevention strategy:
+# # - "no_local": Use MQTT v5.0 no_local subscription flag (recommended)
+# # - "user_property": Tag messages with origin broker ID
+# # - "both": Use both strategies
+# # - "none": No loop prevention (use with caution)
+# loop_prevention = "no_local"
+#
+# # Forward rules define which topics to bridge and in which direction
+# [[bridge.forwards]]
+# local_topic = "sensors/#"               # Local topic pattern
+# remote_topic = "edge/device01/sensors/#"  # Remote topic pattern
+# direction = "out"                       # out, in, or both
+# qos = 1                                 # Maximum QoS (0, 1, or 2)
+# retain = true                           # Forward retained messages
+#
+# [[bridge.forwards]]
+# local_topic = "commands/#"
+# remote_topic = "cloud/commands/#"
+# direction = "in"
+# qos = 2
+# retain = false
