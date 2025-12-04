@@ -50,27 +50,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools
 
-      - name: Install cross-compilation tools (aarch64)
-        if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools gcc-aarch64-linux-gnu musl-dev
-
-      - name: Install cross-compilation tools (armv7)
-        if: matrix.target == 'armv7-unknown-linux-musleabihf'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-arm-linux-gnueabihf
+      - name: Install cross
+        if: contains(matrix.target, 'linux-musl') && matrix.target != 'x86_64-unknown-linux-musl'
+        run: cargo install cross --git https://github.com/cross-rs/cross
 
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
 
-      - name: Build
+      - name: Build (native)
+        if: "!contains(matrix.target, 'linux-musl') || matrix.target == 'x86_64-unknown-linux-musl'"
         run: cargo build --release --target ${{ matrix.target }}
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
-          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_MUSLEABIHF_LINKER: arm-linux-gnueabihf-gcc
+
+      - name: Build (cross)
+        if: contains(matrix.target, 'linux-musl') && matrix.target != 'x86_64-unknown-linux-musl'
+        run: cross build --release --target ${{ matrix.target }}
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
