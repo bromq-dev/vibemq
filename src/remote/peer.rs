@@ -138,7 +138,9 @@ impl RemotePeers {
 
         for peer in &self.peers {
             if peer.should_forward(topic) && peer.status() == RemotePeerStatus::Connected {
-                let result = peer.forward_publish(topic, payload.clone(), qos, retain).await;
+                let result = peer
+                    .forward_publish(topic, payload.clone(), qos, retain)
+                    .await;
                 results.push((peer.name(), result));
             }
         }

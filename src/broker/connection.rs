@@ -1028,16 +1028,17 @@ where
 
             // Check wildcard support
             if !self.config.wildcard_subscription_available
-                && (sub.filter.contains('+') || sub.filter.contains('#')) {
-                    reason_codes.push(ReasonCode::WildcardSubsNotSupported);
-                    sub_info.push((
-                        QoS::AtMostOnce,
-                        false,
-                        RetainHandling::DoNotSend,
-                        sub.filter.clone(),
-                    ));
-                    continue;
-                }
+                && (sub.filter.contains('+') || sub.filter.contains('#'))
+            {
+                reason_codes.push(ReasonCode::WildcardSubsNotSupported);
+                sub_info.push((
+                    QoS::AtMostOnce,
+                    false,
+                    RetainHandling::DoNotSend,
+                    sub.filter.clone(),
+                ));
+                continue;
+            }
 
             // Check ACL for subscribe permission
             let acl_result = self

@@ -38,7 +38,9 @@ pub use manager::BridgeManager;
 pub use topic_mapper::TopicMapper;
 
 // Re-export config types from the config module for convenience
-pub use crate::config::{BridgeConfig, BridgeProtocol, ForwardDirection, ForwardRule, LoopPrevention};
+pub use crate::config::{
+    BridgeConfig, BridgeProtocol, ForwardDirection, ForwardRule, LoopPrevention,
+};
 
 /// User property key for bridge origin tracking (loop prevention)
 pub const BRIDGE_ORIGIN_PROPERTY: &str = "x-vibemq-origin";

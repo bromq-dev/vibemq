@@ -30,10 +30,7 @@ impl BridgeManager {
     }
 
     /// Create a bridge manager from configuration
-    pub fn from_configs(
-        configs: Vec<BridgeConfig>,
-        inbound_callback: InboundCallback,
-    ) -> Self {
+    pub fn from_configs(configs: Vec<BridgeConfig>, inbound_callback: InboundCallback) -> Self {
         let manager = Self::new();
 
         for config in configs {
@@ -57,19 +54,16 @@ impl BridgeManager {
     }
 
     /// Forward a published message to all matching bridges
-    pub async fn forward_publish(
-        &self,
-        topic: &str,
-        payload: Bytes,
-        qos: QoS,
-        retain: bool,
-    ) {
+    pub async fn forward_publish(&self, topic: &str, payload: Bytes, qos: QoS, retain: bool) {
         // Collect bridges first to avoid holding lock across await
         let bridges: Vec<_> = self.bridges.read().iter().cloned().collect();
 
         for bridge in bridges {
             if bridge.should_forward(topic) && bridge.status() == RemotePeerStatus::Connected {
-                if let Err(e) = bridge.forward_publish(topic, payload.clone(), qos, retain).await {
+                if let Err(e) = bridge
+                    .forward_publish(topic, payload.clone(), qos, retain)
+                    .await
+                {
                     debug!("Bridge '{}': Forward failed: {}", bridge.name(), e);
                 }
             }

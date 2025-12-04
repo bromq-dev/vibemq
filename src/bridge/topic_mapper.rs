@@ -49,7 +49,8 @@ impl CompiledRule {
         // Extract prefix transformation
         // e.g., local="sensors/#" remote="edge/device01/sensors/#"
         // For outbound: strip nothing, add "edge/device01/"
-        let (strip_prefix, add_prefix) = Self::compute_prefix_transform(source_pattern, dest_pattern);
+        let (strip_prefix, add_prefix) =
+            Self::compute_prefix_transform(source_pattern, dest_pattern);
 
         Self {
             local_pattern: rule.local_topic.clone(),
@@ -245,19 +246,27 @@ mod tests {
         assert!(mapper.should_forward_outbound("test/foo"));
         assert!(mapper.should_forward_inbound("test/bar"));
 
-        let (topic, _, _) = mapper.map_outbound("test/foo", QoS::AtLeastOnce, false).unwrap();
+        let (topic, _, _) = mapper
+            .map_outbound("test/foo", QoS::AtLeastOnce, false)
+            .unwrap();
         assert_eq!(topic, "test/foo");
     }
 
     #[test]
     fn test_prefix_mapping_outbound() {
-        let rules = vec![make_rule("sensors/#", "edge/device01/sensors/#", ForwardDirection::Out)];
+        let rules = vec![make_rule(
+            "sensors/#",
+            "edge/device01/sensors/#",
+            ForwardDirection::Out,
+        )];
         let mapper = TopicMapper::new(&rules);
 
         assert!(mapper.should_forward_outbound("sensors/temp"));
         assert!(!mapper.should_forward_inbound("edge/device01/sensors/temp"));
 
-        let (topic, _, _) = mapper.map_outbound("sensors/temp", QoS::AtLeastOnce, false).unwrap();
+        let (topic, _, _) = mapper
+            .map_outbound("sensors/temp", QoS::AtLeastOnce, false)
+            .unwrap();
         assert_eq!(topic, "edge/device01/sensors/temp");
     }
 
@@ -268,7 +277,9 @@ mod tests {
         let rules = vec![rule];
         let mapper = TopicMapper::new(&rules);
 
-        let (_, qos, _) = mapper.map_outbound("test/foo", QoS::ExactlyOnce, false).unwrap();
+        let (_, qos, _) = mapper
+            .map_outbound("test/foo", QoS::ExactlyOnce, false)
+            .unwrap();
         assert_eq!(qos, QoS::AtMostOnce);
     }
 
@@ -279,7 +290,9 @@ mod tests {
         let rules = vec![rule];
         let mapper = TopicMapper::new(&rules);
 
-        let (_, _, retain) = mapper.map_outbound("test/foo", QoS::AtLeastOnce, true).unwrap();
+        let (_, _, retain) = mapper
+            .map_outbound("test/foo", QoS::AtLeastOnce, true)
+            .unwrap();
         assert!(!retain);
     }
 

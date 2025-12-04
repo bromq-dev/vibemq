@@ -137,10 +137,9 @@ pub fn validate_topic_filter(filter: &str) -> Result<(), &'static str> {
 /// - $-topics don't match filters starting with + or #
 pub fn topic_matches_filter(topic: &str, filter: &str) -> bool {
     // Topics starting with $ don't match filters starting with + or #
-    if topic.starts_with('$')
-        && (filter.starts_with('+') || filter.starts_with('#')) {
-            return false;
-        }
+    if topic.starts_with('$') && (filter.starts_with('+') || filter.starts_with('#')) {
+        return false;
+    }
 
     let topic_levels: Vec<&str> = topic.split('/').collect();
     let filter_levels: Vec<&str> = filter.split('/').collect();

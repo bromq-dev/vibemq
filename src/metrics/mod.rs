@@ -195,7 +195,9 @@ impl Metrics {
                 "vibemq_connect_duration_seconds",
                 "Time to process a connect handshake",
             )
-            .buckets(vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5]),
+            .buckets(vec![
+                0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5,
+            ]),
         )
         .unwrap();
 
@@ -291,21 +293,29 @@ impl Metrics {
     pub fn client_connected(&self, protocol: &str) {
         self.connections_total.inc();
         self.connections_current.inc();
-        self.connections_by_protocol.with_label_values(&[protocol]).inc();
+        self.connections_by_protocol
+            .with_label_values(&[protocol])
+            .inc();
     }
 
     pub fn client_disconnected(&self, protocol: &str) {
         self.connections_current.dec();
-        self.connections_by_protocol.with_label_values(&[protocol]).dec();
+        self.connections_by_protocol
+            .with_label_values(&[protocol])
+            .dec();
     }
 
     pub fn message_received(&self, msg_type: &str, bytes: usize) {
-        self.messages_received_total.with_label_values(&[msg_type]).inc();
+        self.messages_received_total
+            .with_label_values(&[msg_type])
+            .inc();
         self.messages_bytes_received.inc_by(bytes as u64);
     }
 
     pub fn message_sent(&self, msg_type: &str, bytes: usize) {
-        self.messages_sent_total.with_label_values(&[msg_type]).inc();
+        self.messages_sent_total
+            .with_label_values(&[msg_type])
+            .inc();
         self.messages_bytes_sent.inc_by(bytes as u64);
     }
 

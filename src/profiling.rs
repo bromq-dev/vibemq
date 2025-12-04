@@ -42,14 +42,19 @@ use uuid::Uuid;
 static SPEEDSCOPE_INDEX: &str = include_str!("../assets/speedscope/index.html");
 static SPEEDSCOPE_JS: &[u8] = include_bytes!("../assets/speedscope/speedscope.6f107512.js");
 static SPEEDSCOPE_IMPORT_JS: &[u8] = include_bytes!("../assets/speedscope/import.bcbb2033.js");
-static SPEEDSCOPE_DEMANGLE_JS: &[u8] = include_bytes!("../assets/speedscope/demangle-cpp.1768f4cc.js");
-static SPEEDSCOPE_SOURCEMAP_JS: &[u8] = include_bytes!("../assets/speedscope/source-map.438fa06b.js");
+static SPEEDSCOPE_DEMANGLE_JS: &[u8] =
+    include_bytes!("../assets/speedscope/demangle-cpp.1768f4cc.js");
+static SPEEDSCOPE_SOURCEMAP_JS: &[u8] =
+    include_bytes!("../assets/speedscope/source-map.438fa06b.js");
 static SPEEDSCOPE_RESET_CSS: &[u8] = include_bytes!("../assets/speedscope/reset.8c46b7a1.css");
-static SPEEDSCOPE_FONT_CSS: &[u8] = include_bytes!("../assets/speedscope/source-code-pro.52b1676f.css");
+static SPEEDSCOPE_FONT_CSS: &[u8] =
+    include_bytes!("../assets/speedscope/source-code-pro.52b1676f.css");
 static SPEEDSCOPE_FONT_WOFF2: &[u8] =
     include_bytes!("../assets/speedscope/SourceCodePro-Regular.ttf.f546cbe0.woff2");
-static SPEEDSCOPE_FAVICON_16: &[u8] = include_bytes!("../assets/speedscope/favicon-16x16.f74b3187.png");
-static SPEEDSCOPE_FAVICON_32: &[u8] = include_bytes!("../assets/speedscope/favicon-32x32.bc503437.png");
+static SPEEDSCOPE_FAVICON_16: &[u8] =
+    include_bytes!("../assets/speedscope/favicon-16x16.f74b3187.png");
+static SPEEDSCOPE_FAVICON_32: &[u8] =
+    include_bytes!("../assets/speedscope/favicon-32x32.bc503437.png");
 
 /// Temporary storage for collected profiles
 type ProfileStore = Arc<RwLock<HashMap<String, Vec<u8>>>>;
@@ -58,7 +63,9 @@ type ProfileStore = Arc<RwLock<HashMap<String, Vec<u8>>>>;
 pub const DEFAULT_BIND: &str = "127.0.0.1:6060";
 
 /// Start the profiling HTTP server
-pub async fn start_server(bind: SocketAddr) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub async fn start_server(
+    bind: SocketAddr,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind(bind).await?;
     let profile_store: ProfileStore = Arc::new(RwLock::new(HashMap::new()));
 
@@ -74,7 +81,10 @@ pub async fn start_server(bind: SocketAddr) -> Result<(), Box<dyn std::error::Er
 
         tokio::spawn(async move {
             if let Err(e) = http1::Builder::new()
-                .serve_connection(io, service_fn(move |req| handle_request(req, store.clone())))
+                .serve_connection(
+                    io,
+                    service_fn(move |req| handle_request(req, store.clone())),
+                )
                 .await
             {
                 error!("Profiling server error: {}", e);
@@ -97,10 +107,7 @@ async fn handle_request(
                 Ok(data) => Response::builder()
                     .status(StatusCode::OK)
                     .header("Content-Type", "application/octet-stream")
-                    .header(
-                        "Content-Disposition",
-                        "attachment; filename=\"profile.pb\"",
-                    )
+                    .header("Content-Disposition", "attachment; filename=\"profile.pb\"")
                     .body(Full::new(Bytes::from(data)))
                     .unwrap(),
                 Err(e) => error_response(&format!("Profile error: {}", e)),
@@ -466,7 +473,9 @@ fn redirect_response(location: &str) -> Response<Full<Bytes>> {
         .unwrap()
 }
 
-async fn collect_profile(seconds: u64) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+async fn collect_profile(
+    seconds: u64,
+) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
     info!("Starting {}s CPU profile", seconds);
 
     let guard = pprof::ProfilerGuardBuilder::default()
@@ -615,10 +624,7 @@ async fn collect_top(seconds: u64) -> Result<String, Box<dyn std::error::Error +
         "Showing top {} functions:\n\n",
         sorted.len().min(30)
     ));
-    output.push_str(&format!(
-        "{:>8} {:>7}  {}\n",
-        "samples", "%", "function"
-    ));
+    output.push_str(&format!("{:>8} {:>7}  {}\n", "samples", "%", "function"));
     output.push_str(&format!("{}\n", "-".repeat(60)));
 
     for (func, count) in sorted.iter().take(30) {
@@ -786,13 +792,12 @@ fn get_heap_top() -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         } else if line.trim().starts_with("t*:") && total_bytes == 0 {
             // First t*: line is the total
             let parts: Vec<&str> = line.split(':').collect();
-            if parts.len() >= 3
-                && parts[1].trim().parse::<u64>().is_ok() {
-                    let bytes_str = parts[2].split('[').next().unwrap_or("0").trim();
-                    if let Ok(bytes) = bytes_str.parse::<u64>() {
-                        total_bytes = bytes;
-                    }
+            if parts.len() >= 3 && parts[1].trim().parse::<u64>().is_ok() {
+                let bytes_str = parts[2].split('[').next().unwrap_or("0").trim();
+                if let Ok(bytes) = bytes_str.parse::<u64>() {
+                    total_bytes = bytes;
                 }
+            }
         }
     }
 
@@ -842,13 +847,16 @@ fn get_heap_top() -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
                 0.0
             };
             // Show just the first part of the stack (addresses)
-            let stack_str = stack.first().map(|s| {
-                if s.len() > 40 {
-                    format!("{}...", &s[..40])
-                } else {
-                    s.clone()
-                }
-            }).unwrap_or_default();
+            let stack_str = stack
+                .first()
+                .map(|s| {
+                    if s.len() > 40 {
+                        format!("{}...", &s[..40])
+                    } else {
+                        s.clone()
+                    }
+                })
+                .unwrap_or_default();
             output.push_str(&format!(
                 "{:>10} {:>12} {:>6.1}%  {}\n",
                 objects,
@@ -858,8 +866,10 @@ fn get_heap_top() -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
             ));
         }
 
-        output.push_str("\nNote: Stack traces shown as addresses. For symbolicated output:\n\
-             jeprof --text $(which vibemq) http://localhost:6060/debug/pprof/heap\n");
+        output.push_str(
+            "\nNote: Stack traces shown as addresses. For symbolicated output:\n\
+             jeprof --text $(which vibemq) http://localhost:6060/debug/pprof/heap\n",
+        );
     }
 
     Ok(output)

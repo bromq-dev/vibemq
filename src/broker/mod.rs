@@ -126,15 +126,9 @@ pub enum BrokerEvent {
         retain: bool,
     },
     /// Subscription added (for cluster synchronization)
-    SubscriptionAdded {
-        filter: String,
-        client_id: Arc<str>,
-    },
+    SubscriptionAdded { filter: String, client_id: Arc<str> },
     /// Subscription removed (for cluster synchronization)
-    SubscriptionRemoved {
-        filter: String,
-        client_id: Arc<str>,
-    },
+    SubscriptionRemoved { filter: String, client_id: Arc<str> },
 }
 
 /// The MQTT Broker
@@ -222,7 +216,10 @@ impl Broker {
         // Callback for messages received from cluster peers
         let inbound_callback = Arc::new(
             move |topic: String, payload: Bytes, qos: QoS, retain: bool, _origin_node: String| {
-                debug!("Cluster inbound_callback: routing '{}' to local subscribers", topic);
+                debug!(
+                    "Cluster inbound_callback: routing '{}' to local subscribers",
+                    topic
+                );
 
                 // Create a publish packet
                 let publish = Publish {
@@ -267,7 +264,11 @@ impl Broker {
                     }
                 }
 
-                debug!("Cluster inbound_callback: found {} local subscribers for '{}'", client_qos.len(), topic);
+                debug!(
+                    "Cluster inbound_callback: found {} local subscribers for '{}'",
+                    client_qos.len(),
+                    topic
+                );
 
                 // Send to each local client
                 for (client_id, sub_qos) in client_qos {
@@ -277,8 +278,13 @@ impl Broker {
                         let mut publish = publish.clone();
                         publish.qos = effective_qos;
                         match sender.try_send(Packet::Publish(publish)) {
-                            Ok(()) => debug!("Cluster inbound_callback: sent to client {}", client_id),
-                            Err(e) => debug!("Cluster inbound_callback: failed to send to {}: {:?}", client_id, e),
+                            Ok(()) => {
+                                debug!("Cluster inbound_callback: sent to client {}", client_id)
+                            }
+                            Err(e) => debug!(
+                                "Cluster inbound_callback: failed to send to {}: {:?}",
+                                client_id, e
+                            ),
                         }
                     } else {
                         // Client disconnected, queue message if persistent session
@@ -299,77 +305,82 @@ impl Broker {
     }
 
     /// Create a bridge manager with inbound callback that publishes to this broker
-    pub fn create_bridge_manager(&self, configs: Vec<crate::bridge::BridgeConfig>) -> BridgeManager {
+    pub fn create_bridge_manager(
+        &self,
+        configs: Vec<crate::bridge::BridgeConfig>,
+    ) -> BridgeManager {
         let retained = self.retained.clone();
         let sessions = self.sessions.clone();
         let subscriptions = self.subscriptions.clone();
         let connections = self.connections.clone();
 
-        let inbound_callback = Arc::new(move |topic: String, payload: Bytes, qos: QoS, retain: bool| {
-            // Create a publish packet
-            let publish = Publish {
-                dup: false,
-                qos,
-                retain,
-                topic: topic.clone(),
-                packet_id: None,
-                payload: payload.clone(),
-                properties: Properties::default(),
-            };
+        let inbound_callback = Arc::new(
+            move |topic: String, payload: Bytes, qos: QoS, retain: bool| {
+                // Create a publish packet
+                let publish = Publish {
+                    dup: false,
+                    qos,
+                    retain,
+                    topic: topic.clone(),
+                    packet_id: None,
+                    payload: payload.clone(),
+                    properties: Properties::default(),
+                };
 
-            // Handle retained message
-            if retain {
-                if payload.is_empty() {
-                    retained.remove(&topic);
-                } else {
-                    retained.insert(
-                        topic.clone(),
-                        RetainedMessage {
-                            topic: topic.clone(),
-                            payload,
-                            qos,
-                            properties: Properties::default(),
-                            timestamp: Instant::now(),
-                        },
-                    );
+                // Handle retained message
+                if retain {
+                    if payload.is_empty() {
+                        retained.remove(&topic);
+                    } else {
+                        retained.insert(
+                            topic.clone(),
+                            RetainedMessage {
+                                topic: topic.clone(),
+                                payload,
+                                qos,
+                                properties: Properties::default(),
+                                timestamp: Instant::now(),
+                            },
+                        );
+                    }
                 }
-            }
 
-            // Route to subscribers
-            let matches = subscriptions.matches(&topic);
+                // Route to subscribers
+                let matches = subscriptions.matches(&topic);
 
-            // Deduplicate by client_id (keep highest QoS)
-            let mut client_qos: HashMap<Arc<str>, QoS> = HashMap::new();
-            for sub in matches {
-                let entry = client_qos
-                    .entry(sub.client_id.clone())
-                    .or_insert(QoS::AtMostOnce);
-                if sub.qos > *entry {
-                    *entry = sub.qos;
+                // Deduplicate by client_id (keep highest QoS)
+                let mut client_qos: HashMap<Arc<str>, QoS> = HashMap::new();
+                for sub in matches {
+                    let entry = client_qos
+                        .entry(sub.client_id.clone())
+                        .or_insert(QoS::AtMostOnce);
+                    if sub.qos > *entry {
+                        *entry = sub.qos;
+                    }
                 }
-            }
 
-            // Send to each client
-            for (client_id, sub_qos) in client_qos {
-                let effective_qos = qos.min(sub_qos);
+                // Send to each client
+                for (client_id, sub_qos) in client_qos {
+                    let effective_qos = qos.min(sub_qos);
 
-                if let Some(sender) = connections.get(&client_id) {
-                    let mut publish = publish.clone();
-                    publish.qos = effective_qos;
-                    let _ = sender.try_send(Packet::Publish(publish));
-                } else {
-                    // Client disconnected, queue message if persistent session
-                    if let Some(session) = sessions.get(client_id.as_ref()) {
-                        let mut s = session.write();
-                        if !s.clean_start {
-                            let mut publish = publish.clone();
-                            publish.qos = effective_qos;
-                            s.queue_message(publish);
+                    if let Some(sender) = connections.get(&client_id) {
+                        let mut publish = publish.clone();
+                        publish.qos = effective_qos;
+                        let _ = sender.try_send(Packet::Publish(publish));
+                    } else {
+                        // Client disconnected, queue message if persistent session
+                        if let Some(session) = sessions.get(client_id.as_ref()) {
+                            let mut s = session.write();
+                            if !s.clean_start {
+                                let mut publish = publish.clone();
+                                publish.qos = effective_qos;
+                                s.queue_message(publish);
+                            }
                         }
                     }
                 }
-            }
-        });
+            },
+        );
 
         BridgeManager::from_configs(configs, inbound_callback)
     }

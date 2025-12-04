@@ -45,8 +45,7 @@ pub enum ClusterCommand {
 }
 
 /// Callback for messages received from a cluster peer
-pub type ClusterInboundCallback =
-    Arc<dyn Fn(String, Bytes, QoS, bool, String) + Send + Sync>;
+pub type ClusterInboundCallback = Arc<dyn Fn(String, Bytes, QoS, bool, String) + Send + Sync>;
 
 /// A connection to another cluster node
 pub struct ClusterPeer {
@@ -260,17 +259,17 @@ impl ClusterPeer {
             .map_err(|e| RemoteError::Other(format!("Decode error: {}", e)))?;
 
         match msg {
-            ClusterMessage::HelloAck { node_id: peer_id, version } => {
+            ClusterMessage::HelloAck {
+                node_id: peer_id,
+                version,
+            } => {
                 if version != CLUSTER_PROTOCOL_VERSION {
                     return Err(RemoteError::Rejected(format!(
                         "Protocol version mismatch: {} vs {}",
                         version, CLUSTER_PROTOCOL_VERSION
                     )));
                 }
-                info!(
-                    "ClusterPeer '{}': Connected (peer_id={})",
-                    node_id, peer_id
-                );
+                info!("ClusterPeer '{}': Connected (peer_id={})", node_id, peer_id);
             }
             _ => {
                 return Err(RemoteError::Other("Expected HelloAck".to_string()));
@@ -488,10 +487,15 @@ impl RemotePeer for ClusterPeer {
         // Check if the peer has any subscription that matches this topic
         let subs = self.remote_subscriptions.read();
         let subs_list: Vec<_> = subs.iter().cloned().collect();
-        let matches = subs.iter().any(|filter| topic_matches_filter(topic, filter));
+        let matches = subs
+            .iter()
+            .any(|filter| topic_matches_filter(topic, filter));
         tracing::debug!(
             "ClusterPeer '{}': should_forward('{}')={} remote_subs={:?}",
-            self.node_id, topic, matches, subs_list
+            self.node_id,
+            topic,
+            matches,
+            subs_list
         );
         matches
     }

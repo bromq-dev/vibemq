@@ -66,10 +66,7 @@ impl<V> TopicTrie<V> {
                 node = node.single_wildcard.as_mut().unwrap();
             } else {
                 // Normal level
-                node = node
-                    .children
-                    .entry(level.to_string())
-                    .or_default();
+                node = node.children.entry(level.to_string()).or_default();
             }
 
             // If this is the last level, store the value

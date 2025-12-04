@@ -188,7 +188,6 @@ impl ReasonCode {
     }
 }
 
-
 impl fmt::Display for ReasonCode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

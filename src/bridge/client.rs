@@ -18,13 +18,13 @@ use tracing::{debug, error, info, warn};
 
 use crate::codec::{Decoder, Encoder};
 use crate::protocol::{
-    Connect, Disconnect, Packet, Properties, ProtocolVersion, Publish, QoS, ReasonCode,
-    Subscribe, Subscription, SubscriptionOptions,
+    Connect, Disconnect, Packet, Properties, ProtocolVersion, Publish, QoS, ReasonCode, Subscribe,
+    Subscription, SubscriptionOptions,
 };
 use crate::remote::{RemoteError, RemotePeer, RemotePeerStatus};
 
-use crate::config::BridgeConfig;
 use super::topic_mapper::TopicMapper;
+use crate::config::BridgeConfig;
 
 /// Message to send to the bridge client task
 #[derive(Debug)]
@@ -207,10 +207,13 @@ impl BridgeClient {
 
         // Wait for CONNACK
         let mut read_buf = vec![0u8; 4096];
-        let n = timeout(config.connect_timeout_duration(), read_half.read(&mut read_buf))
-            .await
-            .map_err(|_| RemoteError::Timeout)?
-            .map_err(|e| RemoteError::ConnectionLost(e.to_string()))?;
+        let n = timeout(
+            config.connect_timeout_duration(),
+            read_half.read(&mut read_buf),
+        )
+        .await
+        .map_err(|_| RemoteError::Timeout)?
+        .map_err(|e| RemoteError::ConnectionLost(e.to_string()))?;
 
         if n == 0 {
             return Err(RemoteError::ConnectionLost("Connection closed".to_string()));

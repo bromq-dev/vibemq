@@ -117,12 +117,18 @@ fn default_true() -> bool {
 impl ForwardRule {
     /// Check if this rule applies to outbound messages (local → remote)
     pub fn is_outbound(&self) -> bool {
-        matches!(self.direction, ForwardDirection::Out | ForwardDirection::Both)
+        matches!(
+            self.direction,
+            ForwardDirection::Out | ForwardDirection::Both
+        )
     }
 
     /// Check if this rule applies to inbound messages (remote → local)
     pub fn is_inbound(&self) -> bool {
-        matches!(self.direction, ForwardDirection::In | ForwardDirection::Both)
+        matches!(
+            self.direction,
+            ForwardDirection::In | ForwardDirection::Both
+        )
     }
 }
 

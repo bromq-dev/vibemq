@@ -136,7 +136,10 @@ impl ClusterManager {
         let json = serde_json::to_string(&filters.iter().collect::<Vec<_>>())
             .unwrap_or_else(|_| "[]".to_string());
 
-        debug!("Cluster: updating gossip state with subscriptions: {}", json);
+        debug!(
+            "Cluster: updating gossip state with subscriptions: {}",
+            json
+        );
 
         // Update chitchat state using with_chitchat
         self.chitchat
@@ -178,7 +181,10 @@ impl ClusterManager {
             let should_fwd = peer_ref.should_forward(topic);
             debug!(
                 "Cluster forward check: peer='{}' status={:?} should_forward={} topic='{}'",
-                peer_ref.node_id(), status, should_fwd, topic
+                peer_ref.node_id(),
+                status,
+                should_fwd,
+                topic
             );
             if status == RemotePeerStatus::Connected && should_fwd {
                 debug!("Cluster: forwarding to peer '{}'", peer_ref.node_id());
@@ -284,8 +290,8 @@ impl ClusterManager {
         let mut read_buf = vec![0u8; 65536];
 
         // Wait for Hello
-        let n = tokio::time::timeout(Duration::from_secs(10), read_half.read(&mut read_buf))
-            .await??;
+        let n =
+            tokio::time::timeout(Duration::from_secs(10), read_half.read(&mut read_buf)).await??;
 
         if n == 0 {
             return Err("Connection closed".into());

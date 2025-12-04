@@ -19,7 +19,9 @@ use regex::Regex;
 use serde::Deserialize;
 
 // Re-export bridge config types
-pub use bridge::{BridgeConfig, BridgeProtocol, BridgeTlsConfig, ForwardDirection, ForwardRule, LoopPrevention};
+pub use bridge::{
+    BridgeConfig, BridgeProtocol, BridgeTlsConfig, ForwardDirection, ForwardRule, LoopPrevention,
+};
 
 // Re-export cluster config types
 pub use cluster::ClusterConfig;
@@ -119,7 +121,6 @@ pub struct Config {
     #[serde(default)]
     pub metrics: MetricsConfig,
 }
-
 
 /// Logging configuration
 #[derive(Debug, Clone, Deserialize)]

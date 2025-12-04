@@ -221,7 +221,12 @@ fn test_topic_mapper_retain_filtering() {
 
 #[test]
 fn test_topic_mapper_no_match() {
-    let rules = vec![make_rule("sensors/#", "sensors/#", ForwardDirection::Out, 1)];
+    let rules = vec![make_rule(
+        "sensors/#",
+        "sensors/#",
+        ForwardDirection::Out,
+        1,
+    )];
     let mapper = TopicMapper::new(&rules);
 
     // Should not match unrelated topics

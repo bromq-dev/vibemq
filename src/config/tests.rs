@@ -314,10 +314,20 @@ qos = 1
     // Debug: print what we got
     eprintln!("Bridges loaded: {}", config.bridge.len());
     for b in &config.bridge {
-        eprintln!("  Bridge: {} -> {} ({} forwards)", b.name, b.address, b.forwards.len());
+        eprintln!(
+            "  Bridge: {} -> {} ({} forwards)",
+            b.name,
+            b.address,
+            b.forwards.len()
+        );
     }
 
-    assert_eq!(config.bridge.len(), 1, "Expected 1 bridge but got {}", config.bridge.len());
+    assert_eq!(
+        config.bridge.len(),
+        1,
+        "Expected 1 bridge but got {}",
+        config.bridge.len()
+    );
     assert_eq!(config.bridge[0].name, "test-bridge");
     assert_eq!(config.bridge[0].forwards.len(), 1);
 
