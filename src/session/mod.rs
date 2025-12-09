@@ -2,11 +2,17 @@
 //!
 //! Handles session state, message queues, and packet identifier tracking
 //! for both persistent (clean_start=false) and non-persistent sessions.
+//!
+//! Performance optimizations:
+//! - Uses AHashMap for faster hashing than std HashMap
+//! - Uses Arc<str> for subscription filter keys to share memory
+//! - Pre-allocates collections with reasonable capacity
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use ahash::AHashMap;
 use bytes::Bytes;
 use dashmap::DashMap;
 use parking_lot::RwLock;
@@ -75,12 +81,12 @@ pub struct Session {
     pub keep_alive: u16,
     /// Last activity timestamp
     pub last_activity: Instant,
-    /// Subscriptions
-    pub subscriptions: HashMap<String, SessionSubscription>,
-    /// Inflight outgoing messages (QoS 1/2)
-    pub inflight_outgoing: HashMap<u16, InflightMessage>,
-    /// Inflight incoming messages (QoS 2)
-    pub inflight_incoming: HashMap<u16, Qos2State>,
+    /// Subscriptions (uses Arc<str> keys for memory efficiency)
+    pub subscriptions: AHashMap<Arc<str>, SessionSubscription>,
+    /// Inflight outgoing messages (QoS 1/2) - uses AHashMap for faster lookup
+    pub inflight_outgoing: AHashMap<u16, InflightMessage>,
+    /// Inflight incoming messages (QoS 2) - uses AHashMap for faster lookup
+    pub inflight_incoming: AHashMap<u16, Qos2State>,
     /// Next packet identifier
     next_packet_id: u16,
     /// Pending messages (queued while disconnected)
@@ -93,10 +99,10 @@ pub struct Session {
     pub send_quota: u16,
     /// Maximum packet size
     pub max_packet_size: u32,
-    /// Topic aliases (client -> server)
-    pub client_topic_aliases: HashMap<u16, String>,
-    /// Topic aliases (server -> client)
-    pub server_topic_aliases: HashMap<String, u16>,
+    /// Topic aliases (client -> server) - uses AHashMap for faster lookup
+    pub client_topic_aliases: AHashMap<u16, String>,
+    /// Topic aliases (server -> client) - uses AHashMap for faster lookup
+    pub server_topic_aliases: AHashMap<String, u16>,
     /// Next server topic alias
     next_server_alias: u16,
     /// Maximum topic alias
@@ -129,17 +135,19 @@ impl Session {
             session_expiry_interval: 0,
             keep_alive: 60,
             last_activity: Instant::now(),
-            subscriptions: HashMap::new(),
-            inflight_outgoing: HashMap::new(),
-            inflight_incoming: HashMap::new(),
+            // Pre-allocate with reasonable capacity for typical workloads
+            subscriptions: AHashMap::with_capacity(8),
+            inflight_outgoing: AHashMap::with_capacity(16),
+            inflight_incoming: AHashMap::with_capacity(16),
             next_packet_id: 1,
-            pending_messages: VecDeque::new(),
+            // Pre-allocate for typical persistent session queue
+            pending_messages: VecDeque::with_capacity(64),
             max_pending_messages: 1000,
             receive_maximum: 65535,
             send_quota: 65535,
             max_packet_size: 268_435_455,
-            client_topic_aliases: HashMap::new(),
-            server_topic_aliases: HashMap::new(),
+            client_topic_aliases: AHashMap::with_capacity(8),
+            server_topic_aliases: AHashMap::with_capacity(8),
             next_server_alias: 1,
             topic_alias_maximum: 0,
             will: None,
@@ -220,14 +228,16 @@ impl Session {
     }
 
     /// Add a subscription
+    /// Uses Arc<str> for memory-efficient key storage
     pub fn add_subscription(
         &mut self,
         filter: String,
         options: SubscriptionOptions,
         subscription_id: Option<u32>,
     ) {
+        let filter_arc: Arc<str> = filter.clone().into();
         self.subscriptions.insert(
-            filter.clone(),
+            filter_arc,
             SessionSubscription {
                 filter,
                 options,

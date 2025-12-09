@@ -2,15 +2,21 @@
 //!
 //! Handles individual client connections, packet processing,
 //! and protocol state machine.
+//!
+//! Performance optimizations:
+//! - Uses AHashMap for faster deduplication during message routing
+//! - Uses SmallVec for subscription IDs (typically few per message)
+//! - Pre-allocates collections with reasonable capacity
 
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use ahash::AHashMap;
 use bytes::BytesMut;
 use dashmap::DashMap;
 use parking_lot::RwLock;
+use smallvec::SmallVec;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{broadcast, mpsc};
 use tokio::time::timeout;
@@ -832,6 +838,7 @@ where
     }
 
     /// Route a message to subscribers
+    /// Performance: Uses AHashMap for deduplication and SmallVec for subscription IDs
     async fn route_message(
         &self,
         sender_id: &Arc<str>,
@@ -840,12 +847,14 @@ where
         let matches = self.subscriptions.matches(&publish.topic);
 
         // Deduplicate by client_id, keeping highest QoS and collecting ALL subscription IDs
+        // Uses SmallVec for subscription_ids since most messages match few subscriptions
         struct ClientSub {
             qos: QoS,
             retain_as_published: bool,
-            subscription_ids: Vec<u32>,
+            subscription_ids: SmallVec<[u32; 4]>,
         }
-        let mut client_subs: HashMap<Arc<str>, ClientSub> = HashMap::new();
+        // Use AHashMap for faster hashing, pre-allocate for typical workload
+        let mut client_subs: AHashMap<Arc<str>, ClientSub> = AHashMap::with_capacity(matches.len());
         for sub in matches {
             // Skip sender if no_local is set
             if sub.no_local && sub.client_id == *sender_id {
@@ -857,7 +866,7 @@ where
                 .or_insert(ClientSub {
                     qos: QoS::AtMostOnce,
                     retain_as_published: false,
-                    subscription_ids: Vec::new(),
+                    subscription_ids: SmallVec::new(),
                 });
 
             // Update QoS to highest
@@ -1088,7 +1097,7 @@ where
             // Check if subscription already existed (for retain_handling=1)
             let subscription_existed = {
                 let s = session.read();
-                s.subscriptions.contains_key(&sub.filter)
+                s.subscriptions.contains_key(sub.filter.as_str())
             };
 
             // Add subscription (SubscriptionStore handles $share parsing internally)
@@ -1501,6 +1510,7 @@ impl BytesMutExt for BytesMut {
 }
 
 /// Route a will message to subscribers (standalone function for delayed will tasks)
+/// Performance: Uses AHashMap for deduplication and SmallVec for subscription IDs
 async fn route_will_message(
     subscriptions: &SubscriptionStore,
     connections: &DashMap<Arc<str>, mpsc::Sender<Packet>>,
@@ -1515,9 +1525,9 @@ async fn route_will_message(
     struct ClientSub {
         qos: QoS,
         retain_as_published: bool,
-        subscription_ids: Vec<u32>,
+        subscription_ids: SmallVec<[u32; 4]>,
     }
-    let mut client_subs: HashMap<Arc<str>, ClientSub> = HashMap::new();
+    let mut client_subs: AHashMap<Arc<str>, ClientSub> = AHashMap::with_capacity(matches.len());
     for sub in matches {
         // Skip sender if no_local is set
         if sub.no_local && sub.client_id == *sender_id {
@@ -1529,7 +1539,7 @@ async fn route_will_message(
             .or_insert(ClientSub {
                 qos: QoS::AtMostOnce,
                 retain_as_published: false,
-                subscription_ids: Vec::new(),
+                subscription_ids: SmallVec::new(),
             });
 
         // Update QoS to highest

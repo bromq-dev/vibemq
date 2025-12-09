@@ -34,6 +34,10 @@ parking_lot = "0.12"
 ahash = "0.8"
 fnv = "1.0"
 
+# Performance optimizations - inline small collections and strings
+smallvec = "1.13"
+compact_str = "0.8"
+
 # CLI
 clap = { version = "4.4", features = ["derive"] }
 

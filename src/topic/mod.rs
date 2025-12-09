@@ -3,6 +3,11 @@
 //! Implements topic name/filter validation and a topic trie for efficient
 //! subscription matching based on spec/v3.1.1/4.7_topic-names-and-filters.md
 //! and spec/v5.0/4.7_topic-names-and-filters.md
+//!
+//! Performance optimizations:
+//! - Uses callback-based matching to avoid intermediate allocations
+//! - Uses SmallVec for typical workloads (few matching subscriptions per topic)
+//! - Pre-allocates result vectors with reasonable capacity
 
 mod trie;
 pub mod validation;
@@ -12,8 +17,10 @@ pub use validation::{
     topic_matches_filter, validate_topic_filter, validate_topic_name, TopicLevel,
 };
 
+use ahash::AHashMap;
 use dashmap::DashMap;
 use parking_lot::RwLock;
+use smallvec::SmallVec;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -140,11 +147,16 @@ impl SubscriptionStore {
 
     /// Find all matching subscriptions for a topic
     /// For shared subscriptions, only one subscriber per share group is returned (round-robin)
-    pub fn matches(&self, topic: &str) -> Vec<Subscription> {
+    ///
+    /// Performance: Uses SmallVec to avoid heap allocation for typical workloads
+    /// (most topics have fewer than 16 subscribers)
+    pub fn matches(&self, topic: &str) -> SmallVec<[Subscription; 16]> {
         let trie = self.trie.read();
-        let mut result = Vec::new();
-        let mut share_groups: std::collections::HashMap<Arc<str>, Vec<Subscription>> =
-            std::collections::HashMap::new();
+        // Pre-allocate with reasonable capacity for typical workloads
+        let mut result: SmallVec<[Subscription; 16]> = SmallVec::new();
+        // Use AHashMap for faster hashing, SmallVec for values (most share groups have few subscribers)
+        let mut share_groups: AHashMap<Arc<str>, SmallVec<[Subscription; 4]>> =
+            AHashMap::with_capacity(4);
 
         trie.matches(topic, |subs| {
             for sub in subs {
@@ -152,7 +164,7 @@ impl SubscriptionStore {
                     // Collect shared subscriptions by group
                     share_groups
                         .entry(group.clone())
-                        .or_default()
+                        .or_insert_with(SmallVec::new)
                         .push(sub.clone());
                 } else {
                     // Non-shared subscriptions go directly to result
@@ -176,6 +188,50 @@ impl SubscriptionStore {
         }
 
         result
+    }
+
+    /// Find all matching subscriptions using a callback to avoid allocation
+    /// For shared subscriptions, only one subscriber per share group is called (round-robin)
+    ///
+    /// Note: For shared subscriptions, this still needs to clone subscriptions temporarily
+    /// to handle the round-robin selection. For non-shared subscriptions, the callback
+    /// is invoked immediately without cloning.
+    pub fn matches_with_callback<F>(&self, topic: &str, mut callback: F)
+    where
+        F: FnMut(&Subscription),
+    {
+        let trie = self.trie.read();
+        // Temporary storage for share group selection (must clone due to callback lifetime)
+        let mut share_groups: AHashMap<Arc<str>, SmallVec<[Subscription; 4]>> =
+            AHashMap::with_capacity(4);
+
+        trie.matches(topic, |subs| {
+            for sub in subs {
+                if let Some(ref group) = sub.share_group {
+                    // Collect shared subscriptions by group (clone needed for round-robin selection)
+                    share_groups
+                        .entry(group.clone())
+                        .or_insert_with(SmallVec::new)
+                        .push(sub.clone());
+                } else {
+                    // Non-shared subscriptions get called immediately (no clone!)
+                    callback(sub);
+                }
+            }
+        });
+
+        // For each share group, pick one subscriber using round-robin
+        for (group, subs) in share_groups {
+            if subs.is_empty() {
+                continue;
+            }
+            let counter = self
+                .share_counters
+                .entry(group)
+                .or_insert_with(|| AtomicUsize::new(0));
+            let idx = counter.fetch_add(1, Ordering::Relaxed) % subs.len();
+            callback(&subs[idx]);
+        }
     }
 }
 

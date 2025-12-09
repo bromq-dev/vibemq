@@ -2,16 +2,23 @@
 //!
 //! A trie (prefix tree) data structure optimized for MQTT topic matching.
 //! Supports wildcards (+ and #) for subscription filters.
+//!
+//! Performance optimizations:
+//! - Uses iterator-based traversal to avoid Vec allocations on every operation
+//! - Uses compact_str for memory-efficient topic level storage
+//! - Pre-allocates children HashMap capacity for common workloads
 
 use ahash::AHashMap;
+use compact_str::CompactString;
+use smallvec::SmallVec;
 
 /// Node in the topic trie
 #[derive(Debug)]
 struct TrieNode<V> {
     /// Value stored at this node (subscription data)
     value: Option<V>,
-    /// Children indexed by topic level
-    children: AHashMap<String, TrieNode<V>>,
+    /// Children indexed by topic level (CompactString avoids heap allocation for short strings)
+    children: AHashMap<CompactString, TrieNode<V>>,
     /// Single-level wildcard (+) child
     single_wildcard: Option<Box<TrieNode<V>>>,
     /// Multi-level wildcard (#) value
@@ -22,7 +29,8 @@ impl<V> TrieNode<V> {
     fn new() -> Self {
         Self {
             value: None,
-            children: AHashMap::new(),
+            // Most nodes have few children, but some may have many
+            children: AHashMap::with_capacity(4),
             single_wildcard: None,
             multi_wildcard: None,
         }
@@ -49,28 +57,34 @@ impl<V> TopicTrie<V> {
     }
 
     /// Insert a topic filter with associated value
+    /// Uses iterator-based traversal to avoid Vec allocation
     pub fn insert(&mut self, filter: &str, value: V) {
-        let levels: Vec<&str> = filter.split('/').collect();
         let mut node = &mut self.root;
+        let mut levels = filter.split('/').peekable();
 
-        for (i, level) in levels.iter().enumerate() {
-            if *level == "#" {
+        while let Some(level) = levels.next() {
+            let is_last = levels.peek().is_none();
+
+            if level == "#" {
                 // Multi-level wildcard - store value here
                 node.multi_wildcard = Some(value);
                 return;
-            } else if *level == "+" {
+            } else if level == "+" {
                 // Single-level wildcard
                 if node.single_wildcard.is_none() {
                     node.single_wildcard = Some(Box::new(TrieNode::new()));
                 }
                 node = node.single_wildcard.as_mut().unwrap();
             } else {
-                // Normal level
-                node = node.children.entry(level.to_string()).or_default();
+                // Normal level - use CompactString for efficient storage
+                node = node
+                    .children
+                    .entry(CompactString::new(level))
+                    .or_default();
             }
 
             // If this is the last level, store the value
-            if i == levels.len() - 1 {
+            if is_last {
                 node.value = Some(value);
                 return;
             }
@@ -78,20 +92,23 @@ impl<V> TopicTrie<V> {
     }
 
     /// Get a mutable reference to the value at a filter
+    /// Uses iterator-based traversal to avoid Vec allocation
     pub fn get_mut(&mut self, filter: &str) -> Option<&mut V> {
-        let levels: Vec<&str> = filter.split('/').collect();
         let mut node = &mut self.root;
+        let mut levels = filter.split('/').peekable();
 
-        for (i, level) in levels.iter().enumerate() {
-            if *level == "#" {
+        while let Some(level) = levels.next() {
+            let is_last = levels.peek().is_none();
+
+            if level == "#" {
                 return node.multi_wildcard.as_mut();
-            } else if *level == "+" {
+            } else if level == "+" {
                 node = node.single_wildcard.as_mut()?;
             } else {
-                node = node.children.get_mut(*level)?;
+                node = node.children.get_mut(level)?;
             }
 
-            if i == levels.len() - 1 {
+            if is_last {
                 return node.value.as_mut();
             }
         }
@@ -100,8 +117,9 @@ impl<V> TopicTrie<V> {
     }
 
     /// Remove a filter from the trie
+    /// Uses SmallVec to avoid heap allocation for typical topic depths (up to 8 levels)
     pub fn remove(&mut self, filter: &str) -> Option<V> {
-        let levels: Vec<&str> = filter.split('/').collect();
+        let levels: SmallVec<[&str; 8]> = filter.split('/').collect();
         Self::remove_recursive(&mut self.root, &levels, 0)
     }
 
@@ -173,6 +191,7 @@ impl<V> TopicTrie<V> {
     }
 
     /// Find all matching subscriptions for a topic name
+    /// Uses SmallVec to avoid heap allocation for typical topic depths (up to 8 levels)
     pub fn matches<F>(&self, topic: &str, mut callback: F)
     where
         F: FnMut(&V),
@@ -180,7 +199,7 @@ impl<V> TopicTrie<V> {
         // $-topics don't match filters starting with + or #
         let is_system_topic = topic.starts_with('$');
 
-        let levels: Vec<&str> = topic.split('/').collect();
+        let levels: SmallVec<[&str; 8]> = topic.split('/').collect();
         Self::matches_recursive(&self.root, &levels, 0, is_system_topic, &mut callback);
     }
 
