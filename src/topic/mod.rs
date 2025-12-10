@@ -164,7 +164,7 @@ impl SubscriptionStore {
                     // Collect shared subscriptions by group
                     share_groups
                         .entry(group.clone())
-                        .or_insert_with(SmallVec::new)
+                        .or_default()
                         .push(sub.clone());
                 } else {
                     // Non-shared subscriptions go directly to result
@@ -211,7 +211,7 @@ impl SubscriptionStore {
                     // Collect shared subscriptions by group (clone needed for round-robin selection)
                     share_groups
                         .entry(group.clone())
-                        .or_insert_with(SmallVec::new)
+                        .or_default()
                         .push(sub.clone());
                 } else {
                     // Non-shared subscriptions get called immediately (no clone!)
