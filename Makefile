@@ -2,8 +2,8 @@
 # Build, test, and run conformance tests
 
 .PHONY: all build build-release test test-unit test-integration test-conformance \
-        conformance conformance-v3 conformance-v5 run clean help \
-        install-testmqtt
+        conformance conformance-v3 conformance-v5 conformance-ci \
+        broker-start broker-stop run clean help install-testmqtt
 
 # Configuration
 BROKER_ADDR ?= localhost:1883
@@ -59,16 +59,22 @@ conformance-v5: $(TESTMQTT_BIN)
 conformance-group: $(TESTMQTT_BIN)
 	$(TESTMQTT_BIN) conformance --version $(VERSION) --broker tcp://$(BROKER_ADDR) --tests $(GROUPS) --verbose
 
-# Run broker in background and execute conformance tests
-conformance-ci: build-release $(TESTMQTT_BIN)
+# CI targets for running conformance tests
+conformance-ci: build-release $(TESTMQTT_BIN) broker-start
+	@$(MAKE) conformance BROKER_ADDR=127.0.0.1:1883
+	@$(MAKE) broker-stop
+
+broker-start:
 	@echo "Starting broker..."
-	@./target/release/vibemq -b 127.0.0.1:1883 &
+	@./target/release/vibemq -b 127.0.0.1:1883 & echo $$! > /tmp/vibemq.pid
 	@sleep 2
-	@echo "Running conformance tests..."
-	@$(MAKE) conformance BROKER_ADDR=127.0.0.1:1883; \
-	status=$$?; \
-	pkill -f "vibemq -b 127.0.0.1:1883" 2>/dev/null || true; \
-	exit $$status
+	@echo "Broker started (PID: $$(cat /tmp/vibemq.pid))"
+
+broker-stop:
+	@echo "Stopping broker..."
+	-@kill $$(cat /tmp/vibemq.pid 2>/dev/null) 2>/dev/null || true
+	-@rm -f /tmp/vibemq.pid
+	@echo "Broker stopped"
 
 # Run the broker
 run:
