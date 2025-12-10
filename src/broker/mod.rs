@@ -9,11 +9,11 @@ mod router;
 pub use connection::Connection;
 pub use router::MessageRouter;
 
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use ahash::AHashMap;
 use bytes::Bytes;
 use dashmap::DashMap;
 use tokio::net::{TcpListener, TcpStream};
@@ -253,8 +253,9 @@ impl Broker {
                 // Route to local subscribers only
                 let matches = subscriptions.matches(&topic);
 
-                // Deduplicate by client_id (keep highest QoS)
-                let mut client_qos: HashMap<Arc<str>, QoS> = HashMap::new();
+                // Deduplicate by client_id (keep highest QoS) - use AHashMap for faster lookup
+                let mut client_qos: AHashMap<Arc<str>, QoS> =
+                    AHashMap::with_capacity(matches.len());
                 for sub in matches {
                     let entry = client_qos
                         .entry(sub.client_id.clone())
@@ -348,8 +349,9 @@ impl Broker {
                 // Route to subscribers
                 let matches = subscriptions.matches(&topic);
 
-                // Deduplicate by client_id (keep highest QoS)
-                let mut client_qos: HashMap<Arc<str>, QoS> = HashMap::new();
+                // Deduplicate by client_id (keep highest QoS) - use AHashMap for faster lookup
+                let mut client_qos: AHashMap<Arc<str>, QoS> =
+                    AHashMap::with_capacity(matches.len());
                 for sub in matches {
                     let entry = client_qos
                         .entry(sub.client_id.clone())
@@ -795,8 +797,8 @@ impl Broker {
         // Route to subscribers
         let matches = self.subscriptions.matches(&topic);
 
-        // Deduplicate by client_id (keep highest QoS)
-        let mut client_qos: HashMap<Arc<str>, QoS> = HashMap::new();
+        // Deduplicate by client_id (keep highest QoS) - use AHashMap for faster lookup
+        let mut client_qos: AHashMap<Arc<str>, QoS> = AHashMap::with_capacity(matches.len());
         for sub in matches {
             let entry = client_qos
                 .entry(sub.client_id.clone())

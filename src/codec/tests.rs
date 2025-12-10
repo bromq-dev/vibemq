@@ -675,6 +675,82 @@ fn test_subscribe_packet_id_zero_invalid() {
     ));
 }
 
+#[test]
+fn test_subscribe_v311_ignores_upper_bits() {
+    // In MQTT v3.1.1, only bits 0-1 (QoS) are used; bits 2-7 are reserved
+    // The decoder should only extract QoS and default v5.0 options
+    // Manually construct a SUBSCRIBE packet with upper bits set
+    // Remaining length: packet_id(2) + topic_len(2) + topic(4) + options(1) = 9
+    let raw = [
+        0x82, 0x09, // SUBSCRIBE with correct flags, remaining length = 9
+        0x00, 0x01, // packet ID = 1
+        0x00, 0x04, b't', b'e', b's', b't', // topic "test"
+        0x3E, // QoS 2 (0x02) + upper bits set (0x3C) - would be invalid in v5
+    ];
+
+    let result = decode_packet(&raw, Some(ProtocolVersion::V311)).unwrap();
+    if let Packet::Subscribe(sub) = result {
+        assert_eq!(sub.subscriptions.len(), 1);
+        // QoS should be extracted correctly
+        assert_eq!(sub.subscriptions[0].options.qos, QoS::ExactlyOnce);
+        // v5.0-only options should be defaults (not parsed from upper bits)
+        assert!(!sub.subscriptions[0].options.no_local);
+        assert!(!sub.subscriptions[0].options.retain_as_published);
+        assert_eq!(
+            sub.subscriptions[0].options.retain_handling,
+            RetainHandling::SendAtSubscribe
+        );
+    } else {
+        panic!("Expected Subscribe packet");
+    }
+}
+
+#[test]
+fn test_subscribe_v5_parses_all_options() {
+    // In MQTT v5.0, all option bits are parsed
+    // Remaining length: packet_id(2) + props_len(1) + topic_len(2) + topic(4) + options(1) = 10
+    let raw = [
+        0x82, 0x0A, // SUBSCRIBE with correct flags, remaining length = 10
+        0x00, 0x01, // packet ID = 1
+        0x00, // properties length = 0
+        0x00, 0x04, b't', b'e', b's', b't', // topic "test"
+        0x2E, // QoS 2 + no_local (0x04) + retain_as_published (0x08) + retain_handling=2 (0x20)
+    ];
+
+    let result = decode_packet(&raw, Some(ProtocolVersion::V5)).unwrap();
+    if let Packet::Subscribe(sub) = result {
+        assert_eq!(sub.subscriptions.len(), 1);
+        assert_eq!(sub.subscriptions[0].options.qos, QoS::ExactlyOnce);
+        assert!(sub.subscriptions[0].options.no_local);
+        assert!(sub.subscriptions[0].options.retain_as_published);
+        assert_eq!(
+            sub.subscriptions[0].options.retain_handling,
+            RetainHandling::DoNotSend
+        );
+    } else {
+        panic!("Expected Subscribe packet");
+    }
+}
+
+#[test]
+fn test_subscribe_v5_rejects_reserved_bits() {
+    // In MQTT v5.0, reserved bits 6-7 must be zero
+    // Remaining length: packet_id(2) + props_len(1) + topic_len(2) + topic(4) + options(1) = 10
+    let raw = [
+        0x82, 0x0A, // SUBSCRIBE with correct flags, remaining length = 10
+        0x00, 0x01, // packet ID = 1
+        0x00, // properties length = 0
+        0x00, 0x04, b't', b'e', b's', b't', // topic "test"
+        0xC2, // QoS 2 + reserved bits 6-7 set (invalid)
+    ];
+
+    let result = decode_packet(&raw, Some(ProtocolVersion::V5));
+    assert!(matches!(
+        result,
+        Err(DecodeError::InvalidSubscriptionOptions)
+    ));
+}
+
 // ============================================================================
 // SUBACK Packet Tests (MQTT-3.9)
 // ============================================================================
