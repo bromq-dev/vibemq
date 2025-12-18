@@ -33,6 +33,7 @@ parking_lot = "0.12"
 # Hashing
 ahash = "0.8"
 fnv = "1.0"
+argon2 = "0.5"
 
 # CLI
 clap = { version = "4.4", features = ["derive"] }

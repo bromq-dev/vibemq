@@ -350,8 +350,12 @@ pub struct AuthConfig {
 pub struct UserConfig {
     /// Username
     pub username: String,
-    /// Password (plaintext)
-    pub password: String,
+    /// Password (plaintext) - use password_hash for production
+    #[serde(default)]
+    pub password: Option<String>,
+    /// Password hash (argon2 PHC format: $argon2id$v=19$...)
+    #[serde(default)]
+    pub password_hash: Option<String>,
     /// Role name for ACL permissions
     #[serde(default)]
     pub role: Option<String>,
@@ -484,6 +488,39 @@ impl Config {
             return Err(ConfigError::Validation(
                 "max_inflight must be greater than 0".to_string(),
             ));
+        }
+
+        // Validate user password configuration
+        if self.auth.enabled {
+            for user in &self.auth.users {
+                match (&user.password, &user.password_hash) {
+                    (None, None) => {
+                        return Err(ConfigError::Validation(format!(
+                            "User '{}' must have either 'password' or 'password_hash'",
+                            user.username
+                        )));
+                    }
+                    (Some(_), Some(_)) => {
+                        return Err(ConfigError::Validation(format!(
+                            "User '{}' cannot have both 'password' and 'password_hash'",
+                            user.username
+                        )));
+                    }
+                    (Some(pwd), None) if pwd.is_empty() => {
+                        return Err(ConfigError::Validation(format!(
+                            "User '{}' has empty password",
+                            user.username
+                        )));
+                    }
+                    (None, Some(hash)) if !hash.starts_with("$argon2") => {
+                        return Err(ConfigError::Validation(format!(
+                            "User '{}' has invalid password_hash format (must be argon2 PHC format)",
+                            user.username
+                        )));
+                    }
+                    _ => {}
+                }
+            }
         }
 
         // Validate ACL role references

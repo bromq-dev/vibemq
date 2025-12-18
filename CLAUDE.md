@@ -62,7 +62,7 @@ VibeMQ is a high-performance MQTT v3.1.1/v5.0 broker built with Tokio for async 
 - **`session/`** - `Session` tracks client state (subscriptions, inflight messages, packet IDs). `SessionStore` provides thread-safe session management with DashMap.
 - **`topic/`** - `SubscriptionStore` uses a topic trie for efficient wildcard matching. Supports `+` (single-level) and `#` (multi-level) wildcards, plus shared subscriptions (`$share/{group}/{filter}`).
 - **`hooks/`** - Extensibility via `Hooks` trait for auth, ACL, and event handling. `CompositeHooks` chains multiple implementations.
-- **`auth/`** - `AuthProvider` implements `Hooks` for username/password authentication.
+- **`auth/`** - `AuthProvider` implements `Hooks` for username/password authentication. Supports plaintext passwords (`password`) or argon2 hashes (`password_hash`).
 - **`acl/`** - `AclProvider` implements `Hooks` for topic-based publish/subscribe authorization. Supports `%c` (client_id) and `%u` (username) substitution in topic patterns.
 - **`config/`** - TOML configuration with env var substitution (`${VAR:-default}`) and `VIBEMQ_*` prefix overrides.
 - **`transport/`** - WebSocket support via `WsStream` wrapper around tokio-tungstenite.
@@ -90,7 +90,7 @@ The broker accepts TOML config files. Key sections:
 - `[limits]` - max connections, packet size, inflight messages, queued messages, retry interval
 - `[session]` - keep alive, topic aliases, expiry check interval
 - `[mqtt]` - QoS limits, feature flags (retain, wildcards, shared subs)
-- `[auth]` - enable authentication, user list with roles
+- `[auth]` - enable authentication, user list with `password` (plaintext) or `password_hash` (argon2)
 - `[acl]` - enable ACL, role-based topic patterns with `%c`/`%u` substitution
 - `[metrics]` - enable Prometheus metrics endpoint
 - `[[bridge]]` - bridge connections to remote brokers with topic forwarding rules
