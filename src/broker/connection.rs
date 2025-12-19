@@ -965,6 +965,10 @@ where
             let mut outgoing = publish.clone();
             outgoing.qos = effective_qos;
             outgoing.dup = false;
+            // QoS 0 packets must not have a packet identifier
+            if effective_qos == QoS::AtMostOnce {
+                outgoing.packet_id = None;
+            }
 
             // Clear retain flag unless retain_as_published
             if !sub_info.retain_as_published {
@@ -1638,6 +1642,10 @@ async fn route_will_message(
         let mut outgoing = publish.clone();
         outgoing.qos = effective_qos;
         outgoing.dup = false;
+        // QoS 0 packets must not have a packet identifier
+        if effective_qos == QoS::AtMostOnce {
+            outgoing.packet_id = None;
+        }
 
         // Clear retain flag unless retain_as_published
         if !sub_info.retain_as_published {
