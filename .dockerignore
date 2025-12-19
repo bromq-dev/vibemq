@@ -1,0 +1,36 @@
+# Build artifacts
+target/
+*.rs.bk
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+compose*.yml
+.dockerignore
+
+# CI/CD
+.github/
+
+# Documentation
+*.md
+LICENSE
+docs/
+
+# Examples and tests (not needed in image)
+examples/
+spec/
+benches/
+
+# Misc
+.env*
+*.log
