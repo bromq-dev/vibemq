@@ -11,7 +11,6 @@ categories = ["network-programming"]
 
 [features]
 default = []
-tls = ["tokio-rustls", "rustls-pemfile"]
 pprof = ["dep:pprof", "dep:uuid", "dep:tikv-jemallocator", "dep:tikv-jemalloc-ctl", "dep:tikv-jemalloc-sys"]
 
 [dependencies]
@@ -35,6 +34,10 @@ ahash = "0.8"
 fnv = "1.0"
 argon2 = "0.5"
 
+# Performance optimizations - inline small collections and strings
+smallvec = "1.13"
+compact_str = "0.8"
+
 # CLI
 clap = { version = "4.4", features = ["derive"] }
 
@@ -45,9 +48,8 @@ serde = { version = "1.0", features = ["derive"] }
 # Async trait support
 async-trait = "0.1"
 
-# Optional TLS support
-tokio-rustls = { version = "0.25", optional = true }
-rustls-pemfile = { version = "2.0", optional = true }
+# TLS support
+tokio-rustls = "0.26"
 
 # WebSocket support
 tokio-tungstenite = "0.24"
