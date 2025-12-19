@@ -25,8 +25,11 @@ COPY Cargo.toml Cargo.lock ./
 # Dummy src for dependency caching
 RUN mkdir src && echo "fn main() {}" > src/main.rs
 
-# Build dependencies (cached)
-RUN cargo build --release --target $(cat /rust_target)
+# Build dependencies (cached via BuildKit)
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/app/target \
+    cargo build --release --target $(cat /rust_target)
 
 # Remove dummy
 RUN rm -rf src
@@ -34,9 +37,15 @@ RUN rm -rf src
 # Copy actual source code
 COPY src ./src
 
-# Build final static binary
-RUN cargo build --release --target $(cat /rust_target)
-RUN cp target/$(cat /rust_target)/release/vibemq /vibemq
+# Touch main.rs to invalidate the binary but not deps
+RUN touch src/main.rs
+
+# Build final binary (deps cached via BuildKit)
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/app/target \
+    cargo build --release --target $(cat /rust_target) && \
+    cp target/$(cat /rust_target)/release/vibemq /vibemq
 
 FROM scratch
 
