@@ -367,7 +367,11 @@ where
         // Set v5.0 properties
         if protocol_version == ProtocolVersion::V5 {
             connack.properties.receive_maximum = Some(self.config.receive_maximum);
-            connack.properties.maximum_qos = Some(self.config.max_qos as u8);
+            // Per MQTT 5.0 spec 3.2.2.3.4: Maximum QoS can only be 0 or 1.
+            // If server supports QoS 2, don't include this property (default is 2).
+            if self.config.max_qos != QoS::ExactlyOnce {
+                connack.properties.maximum_qos = Some(self.config.max_qos as u8);
+            }
             connack.properties.retain_available =
                 Some(if self.config.retain_available { 1 } else { 0 });
             connack.properties.maximum_packet_size = Some(self.config.max_packet_size as u32);
