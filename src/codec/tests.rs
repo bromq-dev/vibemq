@@ -275,7 +275,7 @@ fn test_connack_v5_with_properties() {
     let mut props = Properties::default();
     props.session_expiry_interval = Some(3600);
     props.receive_maximum = Some(50);
-    props.maximum_qos = Some(2);
+    props.maximum_qos = Some(1); // Per MQTT 5.0 spec 3.2.2.3.4, can only be 0 or 1
     props.retain_available = Some(1);
     props.maximum_packet_size = Some(1048576);
     props.assigned_client_identifier = Some("generated-id".to_string());
