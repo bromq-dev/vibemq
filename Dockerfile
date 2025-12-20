@@ -34,6 +34,7 @@ RUN cp target/$(cat /rust_target)/release/vibemq /vibemq
 
 # Final minimal image
 FROM scratch
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /vibemq /vibemq
 COPY ./vibemq.toml /etc/vibemq/config.toml
 
