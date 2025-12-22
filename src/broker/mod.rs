@@ -153,6 +153,8 @@ pub enum BrokerEvent {
         qos: QoS,
         retain: bool,
     },
+    /// Message dropped due to queue overflow
+    MessageDropped,
     /// Subscription added (for cluster synchronization)
     SubscriptionAdded { filter: String, client_id: Arc<str> },
     /// Subscription removed (for cluster synchronization)
@@ -780,8 +782,10 @@ impl Broker {
                                     metrics.connections_current.dec();
                                 }
                                 Ok(BrokerEvent::MessagePublished { payload, .. }) => {
-                                    metrics.messages_received_total.with_label_values(&["publish"]).inc();
-                                    metrics.messages_bytes_received.inc_by(payload.len() as u64);
+                                    metrics.publish_received(payload.len());
+                                }
+                                Ok(BrokerEvent::MessageDropped) => {
+                                    metrics.publish_dropped();
                                 }
                                 Ok(BrokerEvent::SubscriptionAdded { .. }) => {
                                     metrics.subscription_added();

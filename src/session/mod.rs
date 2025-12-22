@@ -97,8 +97,8 @@ pub struct Session {
     pub subscriptions: AHashMap<Arc<str>, SessionSubscription>,
     /// Inflight outgoing messages (QoS 1/2) - uses AHashMap for faster lookup
     pub inflight_outgoing: AHashMap<u16, InflightMessage>,
-    /// Inflight incoming messages (QoS 2) - uses AHashMap for faster lookup
-    pub inflight_incoming: AHashMap<u16, Qos2State>,
+    /// Inflight incoming messages (QoS 2) - stores the Publish packet until PUBREL
+    pub inflight_incoming: AHashMap<u16, Publish>,
     /// Next packet identifier
     next_packet_id: u16,
     /// Pending messages (queued while disconnected) with expiry tracking
@@ -135,6 +135,15 @@ pub struct WillMessage {
     pub qos: QoS,
     pub retain: bool,
     pub properties: Properties,
+}
+
+/// Result of queueing a message
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueueResult {
+    /// Message was queued successfully
+    Queued,
+    /// Message was queued but an older message was dropped due to queue overflow
+    DroppedOldest,
 }
 
 impl Session {
@@ -225,16 +234,20 @@ impl Session {
     }
 
     /// Queue a message for later delivery
-    pub fn queue_message(&mut self, publish: Publish) -> bool {
-        if self.pending_messages.len() >= self.max_pending_messages {
+    /// Returns QueueResult::DroppedOldest if the queue was full and an older message was dropped
+    pub fn queue_message(&mut self, publish: Publish) -> QueueResult {
+        let result = if self.pending_messages.len() >= self.max_pending_messages {
             // Drop oldest message
             self.pending_messages.pop_front();
-        }
+            QueueResult::DroppedOldest
+        } else {
+            QueueResult::Queued
+        };
         self.pending_messages.push_back(PendingMessage {
             publish,
             queued_at: Instant::now(),
         });
-        true
+        result
     }
 
     /// Get and remove pending messages, filtering expired ones per MQTT-3.3.2-5
@@ -445,6 +458,30 @@ impl SessionStore {
 
     pub fn is_empty(&self) -> bool {
         self.sessions.is_empty()
+    }
+
+    /// Count disconnected sessions (not yet expired)
+    /// For $SYS/broker/clients/inactive and clients/disconnected
+    pub fn count_disconnected(&self) -> usize {
+        self.sessions
+            .iter()
+            .filter(|entry| {
+                let session = entry.value().read();
+                session.state == SessionState::Disconnected && !session.is_expired()
+            })
+            .count()
+    }
+
+    /// Count total queued messages across all sessions
+    /// For $SYS/broker/messages/stored
+    pub fn total_queued_messages(&self) -> usize {
+        self.sessions
+            .iter()
+            .map(|entry| {
+                let session = entry.value().read();
+                session.pending_messages.len()
+            })
+            .sum()
     }
 }
 
