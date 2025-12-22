@@ -233,6 +233,17 @@ impl SubscriptionStore {
             callback(&subs[idx]);
         }
     }
+
+    /// Count the number of shared subscriptions
+    /// For $SYS/broker/shared_subscriptions/count
+    pub fn shared_subscription_count(&self) -> usize {
+        let trie = self.trie.read();
+        let mut count = 0;
+        trie.for_each(|subs| {
+            count += subs.iter().filter(|s| s.share_group.is_some()).count();
+        });
+        count
+    }
 }
 
 impl Default for SubscriptionStore {
