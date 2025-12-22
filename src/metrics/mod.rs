@@ -19,13 +19,26 @@ pub struct Metrics {
     // Connection metrics
     pub connections_total: IntCounter,
     pub connections_current: IntGauge,
+    pub connections_maximum: IntGauge,
     pub connections_by_protocol: IntGaugeVec,
 
-    // Message metrics
+    // Session metrics
+    pub sessions_expired_total: IntCounter,
+
+    // Message metrics (all packet types)
+    pub messages_total_received: IntCounter,
+    pub messages_total_sent: IntCounter,
+
+    // Message metrics (by type, for Prometheus labels)
     pub messages_received_total: IntCounterVec,
     pub messages_sent_total: IntCounterVec,
     pub messages_bytes_received: IntCounter,
     pub messages_bytes_sent: IntCounter,
+
+    // Publish-specific metrics
+    pub publish_messages_received: IntCounter,
+    pub publish_messages_sent: IntCounter,
+    pub publish_messages_dropped: IntCounter,
 
     // Subscription metrics
     pub subscriptions_current: IntGauge,
@@ -77,7 +90,52 @@ impl Metrics {
         )
         .unwrap();
 
-        // Message metrics
+        let connections_maximum = IntGauge::with_opts(Opts::new(
+            "vibemq_connections_maximum",
+            "Maximum concurrent connections since startup",
+        ))
+        .unwrap();
+
+        // Session metrics
+        let sessions_expired_total = IntCounter::with_opts(Opts::new(
+            "vibemq_sessions_expired_total",
+            "Total sessions expired since startup",
+        ))
+        .unwrap();
+
+        // Message metrics (all packet types)
+        let messages_total_received = IntCounter::with_opts(Opts::new(
+            "vibemq_messages_total_received",
+            "Total packets received (all types)",
+        ))
+        .unwrap();
+
+        let messages_total_sent = IntCounter::with_opts(Opts::new(
+            "vibemq_messages_total_sent",
+            "Total packets sent (all types)",
+        ))
+        .unwrap();
+
+        // Publish-specific metrics
+        let publish_messages_received = IntCounter::with_opts(Opts::new(
+            "vibemq_publish_messages_received_total",
+            "Total PUBLISH packets received",
+        ))
+        .unwrap();
+
+        let publish_messages_sent = IntCounter::with_opts(Opts::new(
+            "vibemq_publish_messages_sent_total",
+            "Total PUBLISH packets sent",
+        ))
+        .unwrap();
+
+        let publish_messages_dropped = IntCounter::with_opts(Opts::new(
+            "vibemq_publish_messages_dropped_total",
+            "Total PUBLISH messages dropped due to queue overflow",
+        ))
+        .unwrap();
+
+        // Message metrics (by type, for Prometheus labels)
         let messages_received_total = IntCounterVec::new(
             Opts::new(
                 "vibemq_messages_received_total",
@@ -209,7 +267,28 @@ impl Metrics {
             .register(Box::new(connections_current.clone()))
             .unwrap();
         registry
+            .register(Box::new(connections_maximum.clone()))
+            .unwrap();
+        registry
             .register(Box::new(connections_by_protocol.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(sessions_expired_total.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(messages_total_received.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(messages_total_sent.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(publish_messages_received.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(publish_messages_sent.clone()))
+            .unwrap();
+        registry
+            .register(Box::new(publish_messages_dropped.clone()))
             .unwrap();
         registry
             .register(Box::new(messages_received_total.clone()))
@@ -267,11 +346,18 @@ impl Metrics {
             registry,
             connections_total,
             connections_current,
+            connections_maximum,
             connections_by_protocol,
+            sessions_expired_total,
+            messages_total_received,
+            messages_total_sent,
             messages_received_total,
             messages_sent_total,
             messages_bytes_received,
             messages_bytes_sent,
+            publish_messages_received,
+            publish_messages_sent,
+            publish_messages_dropped,
             subscriptions_current,
             subscriptions_total,
             unsubscriptions_total,
@@ -296,6 +382,12 @@ impl Metrics {
         self.connections_by_protocol
             .with_label_values(&[protocol])
             .inc();
+        // Update maximum if current exceeds it
+        let current = self.connections_current.get();
+        let max = self.connections_maximum.get();
+        if current > max {
+            self.connections_maximum.set(current);
+        }
     }
 
     pub fn client_disconnected(&self, protocol: &str) {
@@ -353,6 +445,40 @@ impl Metrics {
 
     pub fn cluster_message_received(&self) {
         self.cluster_messages_received.inc();
+    }
+
+    // Publish-specific helpers
+
+    pub fn publish_received(&self, bytes: usize) {
+        self.publish_messages_received.inc();
+        self.messages_total_received.inc();
+        self.messages_bytes_received.inc_by(bytes as u64);
+    }
+
+    pub fn publish_sent(&self, bytes: usize) {
+        self.publish_messages_sent.inc();
+        self.messages_total_sent.inc();
+        self.messages_bytes_sent.inc_by(bytes as u64);
+    }
+
+    pub fn publish_dropped(&self) {
+        self.publish_messages_dropped.inc();
+    }
+
+    // Packet helpers (for total message counts)
+
+    pub fn packet_received(&self) {
+        self.messages_total_received.inc();
+    }
+
+    pub fn packet_sent(&self) {
+        self.messages_total_sent.inc();
+    }
+
+    // Session helpers
+
+    pub fn session_expired(&self) {
+        self.sessions_expired_total.inc();
     }
 }
 

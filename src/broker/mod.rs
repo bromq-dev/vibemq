@@ -21,7 +21,7 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use crate::bridge::BridgeManager;
 use crate::cluster::ClusterManager;
@@ -153,6 +153,8 @@ pub enum BrokerEvent {
         qos: QoS,
         retain: bool,
     },
+    /// Message dropped due to queue overflow
+    MessageDropped,
     /// Subscription added (for cluster synchronization)
     SubscriptionAdded { filter: String, client_id: Arc<str> },
     /// Subscription removed (for cluster synchronization)
@@ -194,7 +196,7 @@ impl Broker {
     /// Create a new broker with custom hooks
     pub fn with_hooks(config: BrokerConfig, hooks: Arc<dyn Hooks>) -> Self {
         let (shutdown, _) = broadcast::channel(1);
-        let (events, _) = broadcast::channel(1024);
+        let (events, _) = broadcast::channel(16384);
 
         Self {
             config,
@@ -453,6 +455,7 @@ impl Broker {
             let events = self.events.clone();
             let shutdown = self.shutdown.clone();
             let hooks = self.hooks.clone();
+            let metrics = self.metrics.clone();
 
             tokio::spawn(async move {
                 loop {
@@ -466,6 +469,7 @@ impl Broker {
                             let config = config.clone();
                             let events = events.clone();
                             let hooks = hooks.clone();
+                            let metrics = metrics.clone();
                             let mut shutdown_rx = shutdown.subscribe();
 
                             tokio::spawn(async move {
@@ -483,6 +487,7 @@ impl Broker {
                                             config,
                                             events,
                                             hooks,
+                                            metrics,
                                         );
 
                                         let conn_fut = conn.run();
@@ -548,6 +553,7 @@ impl Broker {
             let events = self.events.clone();
             let shutdown = self.shutdown.clone();
             let hooks = self.hooks.clone();
+            let metrics = self.metrics.clone();
 
             tokio::spawn(async move {
                 loop {
@@ -561,6 +567,7 @@ impl Broker {
                             let config = config.clone();
                             let events = events.clone();
                             let hooks = hooks.clone();
+                            let metrics = metrics.clone();
                             let tls_acceptor = tls_acceptor.clone();
                             let mut shutdown_rx = shutdown.subscribe();
 
@@ -579,6 +586,7 @@ impl Broker {
                                             config,
                                             events,
                                             hooks,
+                                            metrics,
                                         );
 
                                         let conn_fut = conn.run();
@@ -669,7 +677,7 @@ impl Broker {
                                 }
                                 Ok(_) => {} // Ignore other events
                                 Err(broadcast::error::RecvError::Lagged(n)) => {
-                                    warn!("Bridge event listener lagged, missed {} events", n);
+                                    debug!("Bridge event listener lagged, missed {} events", n);
                                 }
                                 Err(broadcast::error::RecvError::Closed) => break,
                             }
@@ -731,7 +739,7 @@ impl Broker {
                                 }
                                 Ok(_) => {} // Ignore other events
                                 Err(broadcast::error::RecvError::Lagged(n)) => {
-                                    warn!("Cluster event listener lagged, missed {} events", n);
+                                    debug!("Cluster event listener lagged, missed {} events", n);
                                 }
                                 Err(broadcast::error::RecvError::Closed) => break,
                             }
@@ -780,8 +788,10 @@ impl Broker {
                                     metrics.connections_current.dec();
                                 }
                                 Ok(BrokerEvent::MessagePublished { payload, .. }) => {
-                                    metrics.messages_received_total.with_label_values(&["publish"]).inc();
-                                    metrics.messages_bytes_received.inc_by(payload.len() as u64);
+                                    metrics.publish_received(payload.len());
+                                }
+                                Ok(BrokerEvent::MessageDropped) => {
+                                    metrics.publish_dropped();
                                 }
                                 Ok(BrokerEvent::SubscriptionAdded { .. }) => {
                                     metrics.subscription_added();
@@ -790,7 +800,7 @@ impl Broker {
                                     metrics.subscription_removed();
                                 }
                                 Err(broadcast::error::RecvError::Lagged(n)) => {
-                                    warn!("Metrics event listener lagged, missed {} events", n);
+                                    debug!("Metrics event listener lagged, missed {} events", n);
                                 }
                                 Err(broadcast::error::RecvError::Closed) => break,
                             }
@@ -850,6 +860,7 @@ impl Broker {
         let config = self.config.clone();
         let events = self.events.clone();
         let hooks = self.hooks.clone();
+        let metrics = self.metrics.clone();
         let mut shutdown_rx = self.shutdown.subscribe();
 
         tokio::spawn(async move {
@@ -863,6 +874,7 @@ impl Broker {
                 config,
                 events,
                 hooks,
+                metrics,
             );
 
             // Pin the connection future so we can poll it repeatedly

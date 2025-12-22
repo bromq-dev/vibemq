@@ -239,6 +239,35 @@ impl<V> TopicTrie<V> {
             Self::matches_recursive(child, levels, index + 1, is_system_topic, callback);
         }
     }
+
+    /// Iterate over all values in the trie
+    pub fn for_each<F>(&self, mut callback: F)
+    where
+        F: FnMut(&V),
+    {
+        Self::for_each_recursive(&self.root, &mut callback);
+    }
+
+    fn for_each_recursive<F>(node: &TrieNode<V>, callback: &mut F)
+    where
+        F: FnMut(&V),
+    {
+        if let Some(ref v) = node.value {
+            callback(v);
+        }
+
+        if let Some(ref v) = node.multi_wildcard {
+            callback(v);
+        }
+
+        if let Some(ref child) = node.single_wildcard {
+            Self::for_each_recursive(child, callback);
+        }
+
+        for child in node.children.values() {
+            Self::for_each_recursive(child, callback);
+        }
+    }
 }
 
 impl<V> Default for TopicTrie<V> {
