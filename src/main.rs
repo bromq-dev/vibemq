@@ -247,6 +247,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         num_workers,
         sys_topics_enabled: file_config.mqtt.sys_topics,
         sys_topics_interval: Duration::from_secs(file_config.mqtt.sys_interval),
+        max_inflight: file_config.limits.max_inflight,
+        max_queued_messages: file_config.limits.max_queued_messages,
+        max_awaiting_rel: file_config.limits.max_awaiting_rel,
+        retry_interval: file_config.limits.retry_interval_duration(),
     };
 
     info!("Starting VibeMQ MQTT Broker");

@@ -50,6 +50,10 @@ fn test_config(port: u16) -> BrokerConfig {
         num_workers: 2,
         sys_topics_enabled: false, // Disable in tests
         sys_topics_interval: Duration::from_secs(10),
+        max_inflight: 32,
+        max_queued_messages: 1000,
+        max_awaiting_rel: 100,
+        retry_interval: Duration::from_secs(30),
     }
 }
 
@@ -778,6 +782,205 @@ async fn test_multiple_subscribers() {
     if let Some(Packet::Publish(msg2)) = sub2.recv().await {
         assert_eq!(&msg2.payload[..], b"to all");
     }
+
+    broker_handle.abort();
+}
+
+// ============================================================================
+// LIMITS Tests
+// ============================================================================
+
+/// Test max_connections enforcement
+#[tokio::test]
+async fn test_max_connections_limit() {
+    let port = next_port();
+    let mut config = test_config(port);
+    config.max_connections = 2; // Very low limit for testing
+
+    let addr = config.bind_addr;
+    let broker = Broker::new(config);
+    let broker_handle = tokio::spawn(async move {
+        broker.run().await.unwrap();
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Connect first client - should succeed
+    let mut client1 = TestClient::connect(addr, ProtocolVersion::V5).await;
+    let connack1 = client1.mqtt_connect("client1", true).await;
+    assert_eq!(connack1.reason_code, ReasonCode::Success);
+
+    // Connect second client - should succeed
+    let mut client2 = TestClient::connect(addr, ProtocolVersion::V5).await;
+    let connack2 = client2.mqtt_connect("client2", true).await;
+    assert_eq!(connack2.reason_code, ReasonCode::Success);
+
+    // Connect third client - should be rejected with ServerUnavailable
+    let mut client3 = TestClient::connect(addr, ProtocolVersion::V5).await;
+    let connack3 = client3.mqtt_connect("client3", true).await;
+    assert_eq!(
+        connack3.reason_code,
+        ReasonCode::ServerUnavailable,
+        "Third connection should be rejected when max_connections=2"
+    );
+
+    broker_handle.abort();
+}
+
+/// Test max_awaiting_rel enforcement (QoS 2 limit)
+#[tokio::test]
+async fn test_max_awaiting_rel_limit() {
+    let port = next_port();
+    let mut config = test_config(port);
+    config.max_awaiting_rel = 2; // Very low limit for testing
+
+    let addr = config.bind_addr;
+    let broker = Broker::new(config);
+    let broker_handle = tokio::spawn(async move {
+        broker.run().await.unwrap();
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let mut client = TestClient::connect(addr, ProtocolVersion::V5).await;
+    client.mqtt_connect("qos2-test", true).await;
+
+    // Send QoS 2 publishes without completing the handshake (no PUBREL)
+    // First two should succeed
+    for i in 1..=2 {
+        let publish = Packet::Publish(Publish {
+            dup: false,
+            qos: QoS::ExactlyOnce,
+            retain: false,
+            topic: "test/qos2".to_string(),
+            packet_id: Some(i),
+            payload: Bytes::from(format!("msg{}", i)),
+            properties: Properties::default(),
+        });
+        client.send(&publish).await;
+
+        // Should receive PUBREC with Success
+        if let Some(Packet::PubRec(pubrec)) = client.recv().await {
+            assert_eq!(
+                pubrec.reason_code,
+                ReasonCode::Success,
+                "First {} QoS 2 messages should succeed",
+                i
+            );
+        }
+    }
+
+    // Third QoS 2 publish should be rejected with QuotaExceeded
+    let publish3 = Packet::Publish(Publish {
+        dup: false,
+        qos: QoS::ExactlyOnce,
+        retain: false,
+        topic: "test/qos2".to_string(),
+        packet_id: Some(3),
+        payload: Bytes::from("msg3"),
+        properties: Properties::default(),
+    });
+    client.send(&publish3).await;
+
+    if let Some(Packet::PubRec(pubrec)) = client.recv().await {
+        assert_eq!(
+            pubrec.reason_code,
+            ReasonCode::QuotaExceeded,
+            "Third QoS 2 message should be rejected when max_awaiting_rel=2"
+        );
+    }
+
+    broker_handle.abort();
+}
+
+/// Test max_inflight config is applied to sessions
+#[tokio::test]
+async fn test_max_inflight_limit() {
+    let port = next_port();
+    let mut config = test_config(port);
+    config.max_inflight = 16;
+
+    let addr = config.bind_addr;
+    let broker = Broker::new(config);
+    let broker_handle = tokio::spawn(async move {
+        broker.run().await.unwrap();
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Subscriber with QoS 1
+    let mut subscriber = TestClient::connect(addr, ProtocolVersion::V5).await;
+    subscriber.mqtt_connect("sub-inflight", true).await;
+    subscriber
+        .subscribe(1, "test/inflight", QoS::AtLeastOnce)
+        .await;
+
+    // Publisher
+    let mut publisher = TestClient::connect(addr, ProtocolVersion::V5).await;
+    publisher.mqtt_connect("pub-inflight", true).await;
+
+    // Publish a QoS 1 message
+    let publish = Packet::Publish(Publish {
+        dup: false,
+        qos: QoS::AtLeastOnce,
+        retain: false,
+        topic: "test/inflight".to_string(),
+        packet_id: Some(1),
+        payload: Bytes::from("test message"),
+        properties: Properties::default(),
+    });
+    publisher.send(&publish).await;
+    let _ = publisher.recv().await; // PUBACK from broker
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Subscriber should receive the message
+    let msg = subscriber.recv().await;
+    assert!(msg.is_some(), "Should receive message");
+
+    if let Some(Packet::Publish(p)) = msg {
+        assert_eq!(p.payload.as_ref(), b"test message");
+        // ACK it
+        let puback = Packet::PubAck(vibemq::protocol::PubAck::new(p.packet_id.unwrap()));
+        subscriber.send(&puback).await;
+    }
+
+    broker_handle.abort();
+}
+
+/// Test that session takeover doesn't count against max_connections
+#[tokio::test]
+async fn test_max_connections_allows_takeover() {
+    let port = next_port();
+    let mut config = test_config(port);
+    config.max_connections = 1; // Only 1 connection allowed
+
+    let addr = config.bind_addr;
+    let broker = Broker::new(config);
+    let broker_handle = tokio::spawn(async move {
+        broker.run().await.unwrap();
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Connect first client
+    let mut client1 = TestClient::connect(addr, ProtocolVersion::V5).await;
+    let connack1 = client1.mqtt_connect("same-client", true).await;
+    assert_eq!(connack1.reason_code, ReasonCode::Success);
+
+    // Connect second client with SAME client_id - should succeed (takeover)
+    let mut client2 = TestClient::connect(addr, ProtocolVersion::V5).await;
+    let connack2 = client2.mqtt_connect("same-client", true).await;
+    assert_eq!(
+        connack2.reason_code,
+        ReasonCode::Success,
+        "Session takeover should succeed even at max_connections"
+    );
+
+    // Connect third client with DIFFERENT client_id - should fail
+    let mut client3 = TestClient::connect(addr, ProtocolVersion::V5).await;
+    let connack3 = client3.mqtt_connect("different-client", true).await;
+    assert_eq!(
+        connack3.reason_code,
+        ReasonCode::ServerUnavailable,
+        "New client_id should be rejected at max_connections"
+    );
 
     broker_handle.abort();
 }

@@ -75,6 +75,14 @@ pub struct BrokerConfig {
     pub sys_topics_enabled: bool,
     /// $SYS topic publish interval
     pub sys_topics_interval: Duration,
+    /// Maximum in-flight messages per client (QoS 1/2)
+    pub max_inflight: u16,
+    /// Maximum queued messages per offline client
+    pub max_queued_messages: usize,
+    /// Maximum pending PUBREL for QoS 2
+    pub max_awaiting_rel: usize,
+    /// Retry interval for unacked messages
+    pub retry_interval: Duration,
 }
 
 /// TLS configuration for the broker
@@ -113,6 +121,10 @@ impl Default for BrokerConfig {
             num_workers: num_cpus::get(),
             sys_topics_enabled: true,
             sys_topics_interval: Duration::from_secs(10),
+            max_inflight: 32,
+            max_queued_messages: 1000,
+            max_awaiting_rel: 100,
+            retry_interval: Duration::from_secs(30),
         }
     }
 }
