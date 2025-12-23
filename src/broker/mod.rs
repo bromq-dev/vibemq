@@ -83,6 +83,10 @@ pub struct BrokerConfig {
     pub max_awaiting_rel: usize,
     /// Retry interval for unacked messages
     pub retry_interval: Duration,
+    /// Per-connection outbound message channel capacity.
+    /// This buffer holds messages waiting to be written to the client socket.
+    /// Higher values handle burst traffic better but use more memory per connection.
+    pub outbound_channel_capacity: usize,
 }
 
 /// TLS configuration for the broker
@@ -125,6 +129,7 @@ impl Default for BrokerConfig {
             max_queued_messages: 1000,
             max_awaiting_rel: 100,
             retry_interval: Duration::from_secs(30),
+            outbound_channel_capacity: 1024,
         }
     }
 }

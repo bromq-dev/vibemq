@@ -119,7 +119,7 @@ where
         hooks: Arc<dyn Hooks>,
         metrics: Option<Arc<Metrics>>,
     ) -> Self {
-        let (packet_tx, packet_rx) = mpsc::channel(1024);
+        let (packet_tx, packet_rx) = mpsc::channel(config.outbound_channel_capacity);
 
         Self {
             stream,
@@ -286,6 +286,7 @@ where
                         // Quota exhausted - queue message for later delivery
                         debug!("Send quota exhausted for {}, queuing message", s.client_id);
                         if s.queue_message(publish) == QueueResult::DroppedOldest {
+                            warn!(client_id = %s.client_id, "message dropped - queue full (quota exhausted)");
                             let _ = self.events.send(BrokerEvent::MessageDropped);
                         }
                         return Ok(());
@@ -299,6 +300,7 @@ where
                             s.max_inflight, s.client_id
                         );
                         if s.queue_message(publish) == QueueResult::DroppedOldest {
+                            warn!(client_id = %s.client_id, "message dropped - queue full (inflight limit)");
                             let _ = self.events.send(BrokerEvent::MessageDropped);
                         }
                         return Ok(());

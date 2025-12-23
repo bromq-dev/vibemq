@@ -178,14 +178,14 @@ max_qos = 3
 }
 
 #[test]
-fn test_invalid_max_inflight() {
+fn test_zero_max_inflight_is_unbounded() {
     let toml = r#"
 [limits]
 max_inflight = 0
 "#;
 
     let result = Config::parse(toml);
-    assert!(result.is_err());
+    assert!(result.is_ok()); // 0 means unbounded
 }
 
 #[test]

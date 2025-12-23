@@ -222,6 +222,12 @@ pub struct LimitsConfig {
     /// Seconds before retrying unacked messages
     #[serde(default = "default_retry_interval")]
     pub retry_interval: u64,
+    /// Per-connection outbound message channel capacity.
+    /// This buffer holds messages waiting to be written to the client socket.
+    /// Higher values handle burst traffic better but use more memory per connection.
+    /// Set to 0 for unbounded (not recommended for production).
+    #[serde(default = "default_outbound_channel_capacity")]
+    pub outbound_channel_capacity: usize,
 }
 
 fn default_max_connections() -> usize {
@@ -242,6 +248,9 @@ fn default_max_awaiting_rel() -> usize {
 fn default_retry_interval() -> u64 {
     30
 }
+fn default_outbound_channel_capacity() -> usize {
+    1024
+}
 
 impl Default for LimitsConfig {
     fn default() -> Self {
@@ -252,6 +261,7 @@ impl Default for LimitsConfig {
             max_queued_messages: default_max_queued_messages(),
             max_awaiting_rel: default_max_awaiting_rel(),
             retry_interval: default_retry_interval(),
+            outbound_channel_capacity: default_outbound_channel_capacity(),
         }
     }
 }
@@ -452,6 +462,7 @@ impl Config {
             .set_default("limits.max_queued_messages", 1000)?
             .set_default("limits.max_awaiting_rel", 100)?
             .set_default("limits.retry_interval", 30)?
+            .set_default("limits.outbound_channel_capacity", 1024)?
             .set_default("session.default_keep_alive", 60)?
             .set_default("session.max_keep_alive", 65535)?
             .set_default("session.expiry_check_interval", 60)?
@@ -515,12 +526,7 @@ impl Config {
             ));
         }
 
-        // Validate limits
-        if self.limits.max_inflight == 0 {
-            return Err(ConfigError::Validation(
-                "max_inflight must be greater than 0".to_string(),
-            ));
-        }
+        // Note: 0 means unbounded for all limits
 
         // Validate user password configuration
         if self.auth.enabled {
