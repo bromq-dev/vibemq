@@ -29,6 +29,9 @@ dashmap = "5.5"
 crossbeam-channel = "0.5"
 parking_lot = "0.12"
 
+# Socket configuration
+socket2 = "0.5"
+
 # Hashing
 ahash = "0.8"
 fnv = "1.0"

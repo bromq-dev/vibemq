@@ -19,9 +19,13 @@ use std::time::{Duration, Instant};
 use ahash::AHashMap;
 use bytes::Bytes;
 use dashmap::DashMap;
+use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, error, info};
+
+/// TCP listen backlog size - high value for burst connection handling
+const TCP_BACKLOG: i32 = 4096;
 
 use crate::bridge::BridgeManager;
 use crate::cluster::ClusterManager;
@@ -453,12 +457,12 @@ impl Broker {
 
     /// Run the broker
     pub async fn run(&self) -> Result<(), std::io::Error> {
-        let listener = TcpListener::bind(self.config.bind_addr).await?;
+        let listener = create_tcp_listener(self.config.bind_addr)?;
         info!("MQTT/TCP listening on {}", self.config.bind_addr);
 
         // Spawn WebSocket listener if configured
         if let Some(ws_addr) = self.config.ws_bind_addr {
-            let ws_listener = TcpListener::bind(ws_addr).await?;
+            let ws_listener = create_tcp_listener(ws_addr)?;
             info!(
                 "MQTT/WebSocket listening on {} (path: {})",
                 ws_addr, self.config.ws_path
@@ -559,7 +563,7 @@ impl Broker {
                 }
             };
 
-            let tls_listener = TcpListener::bind(tls_addr).await?;
+            let tls_listener = create_tcp_listener(tls_addr)?;
             info!("MQTT/TLS listening on {}", tls_addr);
 
             let sessions = self.sessions.clone();
@@ -1028,4 +1032,31 @@ impl Default for Broker {
     fn default() -> Self {
         Self::new(BrokerConfig::default())
     }
+}
+
+/// Create a TCP listener with a large backlog for burst connection handling.
+///
+/// Uses socket2 to configure the socket before calling listen() with a backlog
+/// of 4096, allowing the kernel to queue many more pending connections during
+/// bursts of incoming connections.
+fn create_tcp_listener(addr: SocketAddr) -> Result<TcpListener, std::io::Error> {
+    let domain = if addr.is_ipv4() {
+        Domain::IPV4
+    } else {
+        Domain::IPV6
+    };
+    let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
+
+    // Allow address reuse
+    socket.set_reuse_address(true)?;
+
+    // Set non-blocking before converting to tokio
+    socket.set_nonblocking(true)?;
+
+    // Bind and listen with large backlog
+    socket.bind(&addr.into())?;
+    socket.listen(TCP_BACKLOG)?;
+
+    // Convert to tokio TcpListener
+    TcpListener::from_std(socket.into())
 }
