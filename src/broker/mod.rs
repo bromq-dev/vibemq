@@ -19,9 +19,13 @@ use std::time::{Duration, Instant};
 use ahash::AHashMap;
 use bytes::Bytes;
 use dashmap::DashMap;
+use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, error, info};
+
+/// TCP listen backlog size - high value for burst connection handling
+const TCP_BACKLOG: i32 = 4096;
 
 use crate::bridge::BridgeManager;
 use crate::cluster::ClusterManager;
@@ -83,6 +87,10 @@ pub struct BrokerConfig {
     pub max_awaiting_rel: usize,
     /// Retry interval for unacked messages
     pub retry_interval: Duration,
+    /// Per-connection outbound message channel capacity.
+    /// This buffer holds messages waiting to be written to the client socket.
+    /// Higher values handle burst traffic better but use more memory per connection.
+    pub outbound_channel_capacity: usize,
 }
 
 /// TLS configuration for the broker
@@ -125,6 +133,7 @@ impl Default for BrokerConfig {
             max_queued_messages: 1000,
             max_awaiting_rel: 100,
             retry_interval: Duration::from_secs(30),
+            outbound_channel_capacity: 1024,
         }
     }
 }
@@ -448,12 +457,15 @@ impl Broker {
 
     /// Run the broker
     pub async fn run(&self) -> Result<(), std::io::Error> {
-        let listener = TcpListener::bind(self.config.bind_addr).await?;
+        let listener = create_tcp_listener(self.config.bind_addr)?;
         info!("MQTT/TCP listening on {}", self.config.bind_addr);
+
+        // Spawn TCP accept loop immediately to handle connection bursts
+        self.spawn_tcp_accept_loop(listener);
 
         // Spawn WebSocket listener if configured
         if let Some(ws_addr) = self.config.ws_bind_addr {
-            let ws_listener = TcpListener::bind(ws_addr).await?;
+            let ws_listener = create_tcp_listener(ws_addr)?;
             info!(
                 "MQTT/WebSocket listening on {} (path: {})",
                 ws_addr, self.config.ws_path
@@ -554,7 +566,7 @@ impl Broker {
                 }
             };
 
-            let tls_listener = TcpListener::bind(tls_addr).await?;
+            let tls_listener = create_tcp_listener(tls_addr)?;
             info!("MQTT/TLS listening on {}", tls_addr);
 
             let sessions = self.sessions.clone();
@@ -849,22 +861,14 @@ impl Broker {
             );
         }
 
-        debug!("Starting TCP accept loop");
-        loop {
-            match listener.accept().await {
-                Ok((stream, addr)) => {
-                    debug!("New TCP connection from {}", addr);
-                    self.handle_connection(stream, addr);
-                }
-                Err(e) => {
-                    error!("Failed to accept TCP connection: {}", e);
-                }
-            }
-        }
+        // Keep the broker running until shutdown
+        // All accept loops are spawned as separate tasks
+        std::future::pending::<()>().await;
+        Ok(())
     }
 
-    /// Handle a new connection
-    fn handle_connection(&self, stream: TcpStream, addr: SocketAddr) {
+    /// Spawn the TCP accept loop as a separate task
+    fn spawn_tcp_accept_loop(&self, listener: TcpListener) {
         let sessions = self.sessions.clone();
         let subscriptions = self.subscriptions.clone();
         let retained = self.retained.clone();
@@ -873,51 +877,30 @@ impl Broker {
         let events = self.events.clone();
         let hooks = self.hooks.clone();
         let metrics = self.metrics.clone();
-        let mut shutdown_rx = self.shutdown.subscribe();
+        let shutdown = self.shutdown.clone();
 
         tokio::spawn(async move {
-            let mut conn = Connection::new(
-                stream,
-                addr,
-                sessions,
-                subscriptions,
-                retained,
-                connections,
-                config,
-                events,
-                hooks,
-                metrics,
-            );
-
-            // Pin the connection future so we can poll it repeatedly
-            let conn_fut = conn.run();
-            tokio::pin!(conn_fut);
-
+            debug!("Starting TCP accept loop");
             loop {
-                tokio::select! {
-                    biased;
-
-                    result = &mut conn_fut => {
-                        if let Err(e) = result {
-                            debug!("Connection error from {}: {}", addr, e);
-                        }
-                        break;
+                match listener.accept().await {
+                    Ok((stream, addr)) => {
+                        debug!("New TCP connection from {}", addr);
+                        spawn_connection_handler(
+                            stream,
+                            addr,
+                            sessions.clone(),
+                            subscriptions.clone(),
+                            retained.clone(),
+                            connections.clone(),
+                            config.clone(),
+                            events.clone(),
+                            hooks.clone(),
+                            metrics.clone(),
+                            shutdown.clone(),
+                        );
                     }
-                    result = shutdown_rx.recv() => {
-                        match result {
-                            Ok(()) => {
-                                debug!("Connection {} shutting down", addr);
-                                break;
-                            }
-                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                                debug!("Connection {} shutdown (channel closed)", addr);
-                                break;
-                            }
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                                // Missed some messages, continue running
-                                continue;
-                            }
-                        }
+                    Err(e) => {
+                        error!("Failed to accept TCP connection: {}", e);
                     }
                 }
             }
@@ -1023,4 +1006,97 @@ impl Default for Broker {
     fn default() -> Self {
         Self::new(BrokerConfig::default())
     }
+}
+
+/// Spawn a connection handler task for a new TCP connection
+#[allow(clippy::too_many_arguments)]
+fn spawn_connection_handler(
+    stream: TcpStream,
+    addr: SocketAddr,
+    sessions: Arc<SessionStore>,
+    subscriptions: Arc<SubscriptionStore>,
+    retained: Arc<DashMap<String, RetainedMessage>>,
+    connections: Arc<DashMap<Arc<str>, mpsc::Sender<Packet>>>,
+    config: BrokerConfig,
+    events: broadcast::Sender<BrokerEvent>,
+    hooks: Arc<dyn Hooks>,
+    metrics: Option<Arc<Metrics>>,
+    shutdown: broadcast::Sender<()>,
+) {
+    let mut shutdown_rx = shutdown.subscribe();
+
+    tokio::spawn(async move {
+        let mut conn = Connection::new(
+            stream,
+            addr,
+            sessions,
+            subscriptions,
+            retained,
+            connections,
+            config,
+            events,
+            hooks,
+            metrics,
+        );
+
+        // Pin the connection future so we can poll it repeatedly
+        let conn_fut = conn.run();
+        tokio::pin!(conn_fut);
+
+        loop {
+            tokio::select! {
+                biased;
+
+                result = &mut conn_fut => {
+                    if let Err(e) = result {
+                        debug!("Connection error from {}: {}", addr, e);
+                    }
+                    break;
+                }
+                result = shutdown_rx.recv() => {
+                    match result {
+                        Ok(()) => {
+                            debug!("Connection {} shutting down", addr);
+                            break;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            debug!("Connection {} shutdown (channel closed)", addr);
+                            break;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            // Missed some messages, continue running
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+/// Create a TCP listener with a large backlog for burst connection handling.
+///
+/// Uses socket2 to configure the socket before calling listen() with a backlog
+/// of 4096, allowing the kernel to queue many more pending connections during
+/// bursts of incoming connections.
+fn create_tcp_listener(addr: SocketAddr) -> Result<TcpListener, std::io::Error> {
+    let domain = if addr.is_ipv4() {
+        Domain::IPV4
+    } else {
+        Domain::IPV6
+    };
+    let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
+
+    // Allow address reuse
+    socket.set_reuse_address(true)?;
+
+    // Set non-blocking before converting to tokio
+    socket.set_nonblocking(true)?;
+
+    // Bind and listen with large backlog
+    socket.bind(&addr.into())?;
+    socket.listen(TCP_BACKLOG)?;
+
+    // Convert to tokio TcpListener
+    TcpListener::from_std(socket.into())
 }

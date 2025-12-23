@@ -222,6 +222,12 @@ pub struct LimitsConfig {
     /// Seconds before retrying unacked messages
     #[serde(default = "default_retry_interval")]
     pub retry_interval: u64,
+    /// Per-connection outbound message channel capacity.
+    /// This buffer holds messages waiting to be written to the client socket.
+    /// Higher values handle burst traffic better but use more memory per connection.
+    /// Set to 0 for unbounded (not recommended for production).
+    #[serde(default = "default_outbound_channel_capacity")]
+    pub outbound_channel_capacity: usize,
 }
 
 fn default_max_connections() -> usize {
@@ -242,6 +248,9 @@ fn default_max_awaiting_rel() -> usize {
 fn default_retry_interval() -> u64 {
     30
 }
+fn default_outbound_channel_capacity() -> usize {
+    1024
+}
 
 impl Default for LimitsConfig {
     fn default() -> Self {
@@ -252,6 +261,7 @@ impl Default for LimitsConfig {
             max_queued_messages: default_max_queued_messages(),
             max_awaiting_rel: default_max_awaiting_rel(),
             retry_interval: default_retry_interval(),
+            outbound_channel_capacity: default_outbound_channel_capacity(),
         }
     }
 }
@@ -435,10 +445,10 @@ impl Config {
     ///
     /// Supports two forms of environment variable usage:
     /// 1. In-file substitution: `${VAR}` or `${VAR:-default}` syntax in the TOML file
-    /// 2. Override via env vars: `VIBEMQ_` prefix with underscores for nesting:
-    ///    - `VIBEMQ_SERVER_BIND=0.0.0.0:1884` overrides `server.bind`
-    ///    - `VIBEMQ_LIMITS_MAX_CONNECTIONS=50000` overrides `limits.max_connections`
-    ///    - `VIBEMQ_AUTH_ENABLED=true` overrides `auth.enabled`
+    /// 2. Override via env vars: `VIBEMQ__` prefix with double underscores for nesting:
+    ///    - `VIBEMQ__SERVER__BIND=0.0.0.0:1884` overrides `server.bind`
+    ///    - `VIBEMQ__LIMITS__MAX_CONNECTIONS=50000` overrides `limits.max_connections`
+    ///    - `VIBEMQ__AUTH__ENABLED=true` overrides `auth.enabled`
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self, ConfigError> {
         let mut builder = config::Config::builder()
             // Start with defaults
@@ -452,6 +462,7 @@ impl Config {
             .set_default("limits.max_queued_messages", 1000)?
             .set_default("limits.max_awaiting_rel", 100)?
             .set_default("limits.retry_interval", 30)?
+            .set_default("limits.outbound_channel_capacity", 1024)?
             .set_default("session.default_keep_alive", 60)?
             .set_default("session.max_keep_alive", 65535)?
             .set_default("session.expiry_check_interval", 60)?
@@ -478,11 +489,12 @@ impl Config {
             Err(e) => return Err(ConfigError::Io(e)),
         }
 
-        // Override with environment variables (VIBEMQ_SERVER_BIND, etc.)
+        // Override with environment variables (VIBEMQ__SERVER__BIND, etc.)
+        // Double underscore separates nested keys, single underscore preserved in field names
         let cfg = builder
             .add_source(
                 Environment::with_prefix("VIBEMQ")
-                    .separator("_")
+                    .separator("__")
                     .try_parsing(true),
             )
             .build()?;
@@ -515,12 +527,7 @@ impl Config {
             ));
         }
 
-        // Validate limits
-        if self.limits.max_inflight == 0 {
-            return Err(ConfigError::Validation(
-                "max_inflight must be greater than 0".to_string(),
-            ));
-        }
+        // Note: 0 means unbounded for all limits
 
         // Validate user password configuration
         if self.auth.enabled {

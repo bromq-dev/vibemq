@@ -323,7 +323,11 @@ where
             }
 
             if let Some(sender) = self.connections.get(&client_id) {
-                let _ = sender.try_send(Packet::Publish(outgoing));
+                if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) =
+                    sender.try_send(Packet::Publish(outgoing))
+                {
+                    warn!(client_id = %client_id, "channel full - dropping message");
+                }
             } else {
                 // Client disconnected, queue message if persistent session
                 if let Some(session) = self.sessions.get(client_id.as_ref()) {

@@ -1,0 +1,47 @@
+═══════════════════════════════════════════════════════════════
+                      BENCHMARK RESULTS
+═══════════════════════════════════════════════════════════════
+
+  Scenario:        fan-in @ QoS 2
+  Duration:        60.0s
+  Publishers:      2000
+  Subscribers:     100
+  Target Rate:     10 msg/s per publisher
+
+  CONNECTIONS
+  ──────────────────────────────────────────────────────────────
+  Attempted:                 2100
+  Succeeded:                 2077
+  Failed:                      23  ⚠
+
+  THROUGHPUT
+  ──────────────────────────────────────────────────────────────
+  Messages Sent:            1.19M
+  Messages Received:      412.05K
+  Messages Timed Out:     774.84K  ⚠
+  Errors:                  13.30K  ⚠
+  Avg Send Rate:            18838 msg/s
+  Avg Recv Rate:             6540 msg/s
+  Delivery Rate:            34.34%
+
+  LATENCY
+  ──────────────────────────────────────────────────────────────
+  Min:                      5.59s
+  Mean:                    21.57s
+  P50 (median):            21.12s
+  P90:                     32.90s
+  P95:                     33.81s
+  P99:                     35.03s
+  P99.9:                   36.10s
+  P99.99:                  37.28s
+  Max:                     38.82s
+
+  CONTAINER RESOURCES
+  ──────────────────────────────────────────────────────────────
+  CPU Avg:                   89.4%
+  CPU Max:                   93.8%
+  Memory Avg:               143.4 MB
+  Memory Max:               245.6 MB
+  Memory Limit:            8589.9 MB
+  Network RX:           228.33 MB
+  Network TX:           259.45 MB

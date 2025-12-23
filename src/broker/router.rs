@@ -32,7 +32,14 @@ impl MessageRouter {
     /// Try to send a message to a specific client (non-blocking)
     pub fn try_send_to_client(&self, client_id: &Arc<str>, packet: Packet) -> bool {
         if let Some(sender) = self.clients.get(client_id) {
-            sender.try_send(packet).is_ok()
+            match sender.try_send(packet) {
+                Ok(()) => true,
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    tracing::warn!(client_id = %client_id, "channel full - backpressure");
+                    false
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => false,
+            }
         } else {
             false
         }

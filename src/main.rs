@@ -125,7 +125,7 @@ struct Args {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
-    // Load configuration file if specified, otherwise use defaults
+    // Load configuration file if specified, otherwise use env vars + defaults
     let file_config = if let Some(config_path) = &args.config {
         match Config::load(config_path) {
             Ok(cfg) => cfg,
@@ -135,7 +135,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     } else {
-        Config::default()
+        Config::from_env().unwrap_or_default()
     };
 
     // Setup logging - CLI overrides config, config overrides default (warn)
@@ -182,9 +182,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let max_connections = args
         .max_connections
         .unwrap_or(file_config.limits.max_connections);
+    let max_connections = if max_connections == 0 {
+        10_000_000
+    } else {
+        max_connections
+    };
     let max_packet_size = args
         .max_packet_size
         .unwrap_or(file_config.limits.max_packet_size);
+    let max_packet_size = if max_packet_size == 0 {
+        usize::MAX
+    } else {
+        max_packet_size
+    };
     let keep_alive = args
         .keep_alive
         .unwrap_or(file_config.session.default_keep_alive);
@@ -247,10 +257,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         num_workers,
         sys_topics_enabled: file_config.mqtt.sys_topics,
         sys_topics_interval: Duration::from_secs(file_config.mqtt.sys_interval),
-        max_inflight: file_config.limits.max_inflight,
-        max_queued_messages: file_config.limits.max_queued_messages,
-        max_awaiting_rel: file_config.limits.max_awaiting_rel,
+        // 0 = unbounded for all limits
+        max_inflight: if file_config.limits.max_inflight == 0 {
+            u16::MAX
+        } else {
+            file_config.limits.max_inflight
+        },
+        max_queued_messages: if file_config.limits.max_queued_messages == 0 {
+            usize::MAX
+        } else {
+            file_config.limits.max_queued_messages
+        },
+        max_awaiting_rel: if file_config.limits.max_awaiting_rel == 0 {
+            usize::MAX
+        } else {
+            file_config.limits.max_awaiting_rel
+        },
         retry_interval: file_config.limits.retry_interval_duration(),
+        outbound_channel_capacity: if file_config.limits.outbound_channel_capacity == 0 {
+            // tokio mpsc channel max is ~2^61, use a large but safe value
+            1_000_000
+        } else {
+            file_config.limits.outbound_channel_capacity
+        },
     };
 
     info!("Starting VibeMQ MQTT Broker");
@@ -264,6 +293,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("  Workers: {}", broker_config.num_workers);
     info!("  Max connections: {}", broker_config.max_connections);
     info!("  Max packet size: {} bytes", broker_config.max_packet_size);
+    info!("  Max inflight: {}", broker_config.max_inflight);
+    info!(
+        "  Max queued messages: {}",
+        broker_config.max_queued_messages
+    );
+    info!(
+        "  Outbound channel capacity: {}",
+        broker_config.outbound_channel_capacity
+    );
     info!("  Max QoS: {:?}", broker_config.max_qos);
 
     // Log auth/ACL status
