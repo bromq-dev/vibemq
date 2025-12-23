@@ -182,11 +182,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let max_connections = args
         .max_connections
         .unwrap_or(file_config.limits.max_connections);
-    let max_connections = if max_connections == 0 { 10_000_000 } else { max_connections };
+    let max_connections = if max_connections == 0 {
+        10_000_000
+    } else {
+        max_connections
+    };
     let max_packet_size = args
         .max_packet_size
         .unwrap_or(file_config.limits.max_packet_size);
-    let max_packet_size = if max_packet_size == 0 { usize::MAX } else { max_packet_size };
+    let max_packet_size = if max_packet_size == 0 {
+        usize::MAX
+    } else {
+        max_packet_size
+    };
     let keep_alive = args
         .keep_alive
         .unwrap_or(file_config.session.default_keep_alive);
@@ -286,8 +294,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("  Max connections: {}", broker_config.max_connections);
     info!("  Max packet size: {} bytes", broker_config.max_packet_size);
     info!("  Max inflight: {}", broker_config.max_inflight);
-    info!("  Max queued messages: {}", broker_config.max_queued_messages);
-    info!("  Outbound channel capacity: {}", broker_config.outbound_channel_capacity);
+    info!(
+        "  Max queued messages: {}",
+        broker_config.max_queued_messages
+    );
+    info!(
+        "  Outbound channel capacity: {}",
+        broker_config.outbound_channel_capacity
+    );
     info!("  Max QoS: {:?}", broker_config.max_qos);
 
     // Log auth/ACL status
