@@ -30,7 +30,9 @@ use crate::protocol::{
     ConnAck, Connect, Disconnect, Packet, Properties, ProtocolVersion, PubAck, PubComp, PubRec,
     PubRel, Publish, QoS, ReasonCode, RetainHandling, SubAck, Subscribe, UnsubAck, Unsubscribe,
 };
-use crate::session::{InflightMessage, Qos2State, QueueResult, Session, SessionStore, WillMessage};
+use crate::session::{
+    InflightMessage, Qos2State, QueueResult, Session, SessionLimits, SessionStore, WillMessage,
+};
 use crate::topic::{validate_topic_filter, validate_topic_name, Subscription, SubscriptionStore};
 
 /// Connection error types
@@ -282,6 +284,29 @@ where
             }
         }
 
+        // Check max_connections limit
+        // Only count as new connection if client_id is not already connected
+        let is_takeover = self.connections.contains_key(&client_id);
+        if !is_takeover && self.connections.len() >= self.config.max_connections {
+            debug!(
+                "Max connections ({}) reached, rejecting {}",
+                self.config.max_connections, client_id
+            );
+            let connack = ConnAck {
+                session_present: false,
+                reason_code: ReasonCode::ServerUnavailable,
+                properties: Properties::default(),
+            };
+            self.write_buf.clear();
+            self.encoder
+                .encode(&Packet::ConnAck(connack), &mut self.write_buf)
+                .map_err(|e| ConnectionError::Protocol(e.into()))?;
+            self.stream.write_all(&self.write_buf).await?;
+            return Err(ConnectionError::Protocol(
+                crate::protocol::ProtocolError::ProtocolViolation("max connections reached"),
+            ));
+        }
+
         // Check for existing connection and disconnect it
         if let Some(existing) = self.connections.get(&client_id) {
             // Send disconnect to existing connection
@@ -293,9 +318,17 @@ where
         }
 
         // Get or create session
-        let (session, session_present) =
-            self.sessions
-                .get_or_create(&client_id, protocol_version, connect.clean_start);
+        let session_limits = SessionLimits {
+            max_pending_messages: self.config.max_queued_messages,
+            max_inflight: self.config.max_inflight,
+            max_awaiting_rel: self.config.max_awaiting_rel,
+        };
+        let (session, session_present) = self.sessions.get_or_create(
+            &client_id,
+            protocol_version,
+            connect.clean_start,
+            session_limits,
+        );
 
         // If clean_start=true, clear any previous subscriptions from the SubscriptionStore
         if connect.clean_start {
@@ -441,8 +474,18 @@ where
             for mut publish in pending {
                 if publish.qos != QoS::AtMostOnce {
                     let mut s = session.write();
+                    // Check send quota (MQTT v5.0 flow control)
                     if !s.decrement_send_quota() {
                         // Quota exhausted - re-queue remaining messages
+                        if s.queue_message(publish) == QueueResult::DroppedOldest {
+                            let _ = self.events.send(BrokerEvent::MessageDropped);
+                        }
+                        continue;
+                    }
+                    // Check max_inflight limit
+                    if s.inflight_outgoing.len() >= s.max_inflight as usize {
+                        // Inflight limit reached - re-queue and restore quota
+                        s.increment_send_quota();
                         if s.queue_message(publish) == QueueResult::DroppedOldest {
                             let _ = self.events.send(BrokerEvent::MessageDropped);
                         }
@@ -530,6 +573,12 @@ where
             Duration::from_secs((s.keep_alive as u64 * 3) / 2)
         };
 
+        // Create retry ticker for unacked QoS 1/2 messages
+        let retry_interval = self.config.retry_interval;
+        let mut retry_ticker = tokio::time::interval(retry_interval);
+        // Skip the first immediate tick
+        retry_ticker.tick().await;
+
         loop {
             tokio::select! {
                 // Read from socket
@@ -607,6 +656,19 @@ where
                                     }
                                     continue;
                                 }
+                                // Check max_inflight limit
+                                if s.inflight_outgoing.len() >= s.max_inflight as usize {
+                                    // Inflight limit reached - queue and restore quota
+                                    s.increment_send_quota();
+                                    debug!(
+                                        "Inflight limit ({}) reached for {}, queuing message",
+                                        s.max_inflight, s.client_id
+                                    );
+                                    if s.queue_message(publish) == QueueResult::DroppedOldest {
+                                        let _ = self.events.send(BrokerEvent::MessageDropped);
+                                    }
+                                    continue;
+                                }
                                 // Assign packet ID
                                 if publish.packet_id.is_none() {
                                     publish.packet_id = Some(s.next_packet_id());
@@ -657,6 +719,11 @@ where
                     }
                 }
 
+                // Retry unacked messages
+                _ = retry_ticker.tick() => {
+                    self.retry_unacked_messages(&session).await?;
+                }
+
                 // Keep alive timeout
                 _ = tokio::time::sleep(keep_alive) => {
                     let expired = {
@@ -671,6 +738,74 @@ where
                 }
             }
         }
+    }
+
+    /// Retry unacked QoS 1/2 messages
+    async fn retry_unacked_messages(
+        &mut self,
+        session: &Arc<RwLock<Session>>,
+    ) -> Result<(), ConnectionError> {
+        let now = Instant::now();
+        let retry_interval = self.config.retry_interval;
+
+        // Collect messages that need retry (to avoid holding lock while sending)
+        let to_retry: Vec<_> = {
+            let mut s = session.write();
+            s.inflight_outgoing
+                .iter_mut()
+                .filter_map(|(packet_id, inflight)| {
+                    if now.duration_since(inflight.sent_at) >= retry_interval {
+                        // Update retry metadata
+                        inflight.retry_count += 1;
+                        inflight.sent_at = now;
+
+                        Some((*packet_id, inflight.publish.clone(), inflight.qos2_state))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+
+        // Get max packet size
+        let max_packet_size = {
+            let s = session.read();
+            s.max_packet_size
+        };
+
+        // Send retries
+        for (packet_id, mut publish, qos2_state) in to_retry {
+            match qos2_state {
+                None | Some(Qos2State::WaitingPubRec) => {
+                    // QoS 1, or QoS 2 waiting for PUBREC: resend PUBLISH with DUP flag
+                    publish.dup = true;
+                    publish.packet_id = Some(packet_id);
+
+                    self.write_buf.clear();
+                    self.encoder
+                        .encode(&Packet::Publish(publish), &mut self.write_buf)
+                        .map_err(|e| ConnectionError::Protocol(e.into()))?;
+
+                    if self.write_buf.len() <= max_packet_size as usize {
+                        trace!("Retrying PUBLISH packet_id={}", packet_id);
+                        self.stream.write_all(&self.write_buf).await?;
+                    }
+                }
+                Some(Qos2State::WaitingPubComp) => {
+                    // QoS 2 waiting for PUBCOMP: resend PUBREL
+                    let pubrel = PubRel::new(packet_id);
+                    self.write_buf.clear();
+                    self.encoder
+                        .encode(&Packet::PubRel(pubrel), &mut self.write_buf)
+                        .map_err(|e| ConnectionError::Protocol(e.into()))?;
+
+                    trace!("Retrying PUBREL packet_id={}", packet_id);
+                    self.stream.write_all(&self.write_buf).await?;
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Handle an incoming packet
@@ -885,6 +1020,29 @@ where
             QoS::ExactlyOnce => {
                 // Store message and send PUBREC - message will be routed on PUBREL
                 let packet_id = publish.packet_id.unwrap();
+
+                // Check max_awaiting_rel limit
+                let limit_exceeded = {
+                    let s = session.read();
+                    s.inflight_incoming.len() >= s.max_awaiting_rel
+                };
+
+                if limit_exceeded {
+                    // Send PUBREC with QuotaExceeded - client should retry later
+                    debug!("Max awaiting PUBREL limit reached, rejecting QoS 2 publish");
+                    let pubrec = PubRec {
+                        packet_id,
+                        reason_code: ReasonCode::QuotaExceeded,
+                        properties: Properties::default(),
+                    };
+                    self.write_buf.clear();
+                    self.encoder
+                        .encode(&Packet::PubRec(pubrec), &mut self.write_buf)
+                        .map_err(|e| ConnectionError::Protocol(e.into()))?;
+                    self.stream.write_all(&self.write_buf).await?;
+                    return Ok(());
+                }
+
                 {
                     let mut s = session.write();
                     s.inflight_incoming.insert(packet_id, publish.clone());

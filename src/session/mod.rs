@@ -105,6 +105,10 @@ pub struct Session {
     pub pending_messages: VecDeque<PendingMessage>,
     /// Maximum pending messages
     pub max_pending_messages: usize,
+    /// Maximum in-flight outgoing messages (QoS 1/2)
+    pub max_inflight: u16,
+    /// Maximum pending PUBREL (QoS 2 incoming)
+    pub max_awaiting_rel: usize,
     /// Receive maximum (flow control)
     pub receive_maximum: u16,
     /// Current send quota
@@ -146,8 +150,30 @@ pub enum QueueResult {
     DroppedOldest,
 }
 
+/// Session limits configuration
+#[derive(Debug, Clone, Copy)]
+pub struct SessionLimits {
+    pub max_pending_messages: usize,
+    pub max_inflight: u16,
+    pub max_awaiting_rel: usize,
+}
+
+impl Default for SessionLimits {
+    fn default() -> Self {
+        Self {
+            max_pending_messages: 1000,
+            max_inflight: 32,
+            max_awaiting_rel: 100,
+        }
+    }
+}
+
 impl Session {
-    pub fn new(client_id: Arc<str>, protocol_version: ProtocolVersion) -> Self {
+    pub fn new(
+        client_id: Arc<str>,
+        protocol_version: ProtocolVersion,
+        limits: SessionLimits,
+    ) -> Self {
         Self {
             client_id,
             protocol_version,
@@ -163,7 +189,9 @@ impl Session {
             next_packet_id: 1,
             // Pre-allocate for typical persistent session queue
             pending_messages: VecDeque::with_capacity(64),
-            max_pending_messages: 1000,
+            max_pending_messages: limits.max_pending_messages,
+            max_inflight: limits.max_inflight,
+            max_awaiting_rel: limits.max_awaiting_rel,
             receive_maximum: 65535,
             send_quota: 65535,
             max_packet_size: 268_435_455,
@@ -378,6 +406,7 @@ impl SessionStore {
         client_id: &str,
         protocol_version: ProtocolVersion,
         clean_start: bool,
+        limits: SessionLimits,
     ) -> (Arc<RwLock<Session>>, bool) {
         let client_id: Arc<str> = client_id.into();
 
@@ -386,6 +415,7 @@ impl SessionStore {
             let session = Arc::new(RwLock::new(Session::new(
                 client_id.clone(),
                 protocol_version,
+                limits,
             )));
             self.sessions.insert(client_id, session.clone());
             (session, false)
@@ -406,6 +436,7 @@ impl SessionStore {
             let session = Arc::new(RwLock::new(Session::new(
                 client_id.clone(),
                 protocol_version,
+                limits,
             )));
             self.sessions.insert(client_id, session.clone());
             (session, false)
@@ -500,7 +531,8 @@ mod tests {
     /// Test MQTT-4.9.0-2: Send quota enforcement
     #[test]
     fn test_send_quota_enforcement() {
-        let mut session = Session::new("test".into(), ProtocolVersion::V5);
+        let mut session =
+            Session::new("test".into(), ProtocolVersion::V5, SessionLimits::default());
 
         // Set receive_maximum to 2 (client can receive max 2 inflight QoS>0 messages)
         session.receive_maximum = 2;
@@ -528,7 +560,8 @@ mod tests {
     /// Test MQTT-3.3.2-5: Message expiry interval enforcement
     #[test]
     fn test_message_expiry_cleanup() {
-        let mut session = Session::new("test".into(), ProtocolVersion::V5);
+        let mut session =
+            Session::new("test".into(), ProtocolVersion::V5, SessionLimits::default());
 
         // Create a message with 1 second expiry
         let mut publish1 = Publish {
@@ -593,7 +626,8 @@ mod tests {
     /// Test that message expiry interval is decremented when draining
     #[test]
     fn test_message_expiry_interval_update() {
-        let mut session = Session::new("test".into(), ProtocolVersion::V5);
+        let mut session =
+            Session::new("test".into(), ProtocolVersion::V5, SessionLimits::default());
 
         let mut publish = Publish {
             topic: "test/topic".to_string(),
@@ -631,7 +665,8 @@ mod tests {
     /// Test cleanup_expired_messages removes expired messages
     #[test]
     fn test_cleanup_expired_messages() {
-        let mut session = Session::new("test".into(), ProtocolVersion::V5);
+        let mut session =
+            Session::new("test".into(), ProtocolVersion::V5, SessionLimits::default());
 
         let mut publish1 = Publish {
             topic: "test/topic".to_string(),

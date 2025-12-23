@@ -52,6 +52,10 @@ fn test_config(port: u16) -> BrokerConfig {
         num_workers: 2,
         sys_topics_enabled: false,
         sys_topics_interval: Duration::from_secs(10),
+        max_inflight: 32,
+        max_queued_messages: 1000,
+        max_awaiting_rel: 100,
+        retry_interval: Duration::from_secs(30),
     }
 }
 
