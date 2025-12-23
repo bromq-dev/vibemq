@@ -77,14 +77,14 @@ Broadcast scenario delivering each message to 2000 subscribers (~190K msg/s fano
 
 | Broker | Delivery Rate | Mean Latency | P99 Latency | CPU | Memory |
 |--------|---------------|--------------|-------------|-----|--------|
-| **VibeMQ** | **100.00%** | **434ms** | **879ms** | **287%** | **516 MB** |
+| **VibeMQ** | **99.96%** | **279ms** | **652ms** | 493% | **355 MB** |
 | Mosquitto | 13.02% | 26.5s | 42.8s | 81% | 190 MB |
 | EMQX | 23.38% | 20.2s | 45.3s | 312% | 8,590 MB (OOM) |
 | VerneMQ | 1.63% | 29.2s | 57.3s | 361% | 8,590 MB (OOM) |
 
 ### Key Observations
 
-- **100% message delivery** - VibeMQ delivered every message at QoS 2 while competitors lost 65-99%+
+- **Near-100% message delivery** - VibeMQ delivered 99.96%+ of messages at QoS 2 while competitors lost 65-99%+
 - **Lowest latency** - 4-15x faster than competitors at QoS 0; milliseconds vs tens of seconds at QoS 2
 - **Flat memory profile** - Memory stays constant under load while others ballooned to the 8.5GB limit
 - **Memory efficient** - 6-8x less memory than EMQX/VerneMQ on fan-out workloads
