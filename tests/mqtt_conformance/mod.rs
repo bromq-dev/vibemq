@@ -109,17 +109,14 @@ impl RawClient {
             Ok(Err(_)) => true, // Error (connection reset)
             Ok(Ok(n)) => {
                 // Check if we received a DISCONNECT packet (0xE0)
-                if n >= 2 && buf[0] == 0xE0 {
-                    true
-                } else {
-                    false
-                }
+                n >= 2 && buf[0] == 0xE0
             }
             _ => false,
         }
     }
 
     /// Send a v3.1.1 CONNECT packet with the given client ID
+    #[allow(dead_code)]
     pub async fn connect_v311(&mut self, client_id: &str, clean_session: bool) {
         let flags = if clean_session { 0x02 } else { 0x00 };
         let client_id_bytes = client_id.as_bytes();
@@ -137,6 +134,7 @@ impl RawClient {
     }
 
     /// Receive CONNACK and return (session_present, reason_code)
+    #[allow(dead_code)]
     pub async fn recv_connack(&mut self) -> Option<(bool, u8)> {
         if let Some(data) = self.recv_raw(1000).await {
             if data.len() >= 4 && data[0] == 0x20 {
