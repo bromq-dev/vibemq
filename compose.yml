@@ -6,7 +6,7 @@ services:
       - 1883:1883
     environment:
       # yolo mode: 0 = unbounded for all limits
-      - VIBEMQ__LIMITS__MAX_CONNECTIONS=0
+      - VIBEMQ__LIMITS__MAX_CONNECTIONS=10000
       - VIBEMQ__LIMITS__MAX_INFLIGHT=0
       - VIBEMQ__LIMITS__MAX_QUEUED_MESSAGES=0
       - VIBEMQ__LIMITS__MAX_AWAITING_REL=0

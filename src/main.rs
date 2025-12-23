@@ -182,7 +182,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let max_connections = args
         .max_connections
         .unwrap_or(file_config.limits.max_connections);
-    let max_connections = if max_connections == 0 { usize::MAX } else { max_connections };
+    let max_connections = if max_connections == 0 { 10_000_000 } else { max_connections };
     let max_packet_size = args
         .max_packet_size
         .unwrap_or(file_config.limits.max_packet_size);
@@ -267,7 +267,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         retry_interval: file_config.limits.retry_interval_duration(),
         outbound_channel_capacity: if file_config.limits.outbound_channel_capacity == 0 {
-            usize::MAX
+            // tokio mpsc channel max is ~2^61, use a large but safe value
+            1_000_000
         } else {
             file_config.limits.outbound_channel_capacity
         },
