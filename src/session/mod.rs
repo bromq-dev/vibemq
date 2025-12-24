@@ -295,7 +295,10 @@ impl Session {
                         return None;
                     }
                     // Update expiry to reflect remaining time
-                    Some(pm.publish.with_updated_message_expiry(Some(expiry - elapsed)))
+                    Some(
+                        pm.publish
+                            .with_updated_message_expiry(Some(expiry - elapsed)),
+                    )
                 } else {
                     Some(pm.publish)
                 }
@@ -565,8 +568,10 @@ mod tests {
             Session::new("test".into(), ProtocolVersion::V5, SessionLimits::default());
 
         // Create a message with 1 second expiry
-        let mut props1 = Properties::default();
-        props1.message_expiry_interval = Some(1); // 1 second
+        let props1 = Properties {
+            message_expiry_interval: Some(1), // 1 second
+            ..Default::default()
+        };
         let publish1 = Publish::with_properties(
             "test/topic",
             bytes::Bytes::from("test1"),
@@ -585,8 +590,10 @@ mod tests {
         );
 
         // Create a message with long expiry
-        let mut props3 = Properties::default();
-        props3.message_expiry_interval = Some(3600); // 1 hour
+        let props3 = Properties {
+            message_expiry_interval: Some(3600), // 1 hour
+            ..Default::default()
+        };
         let publish3 = Publish::with_properties(
             "test/topic",
             bytes::Bytes::from("test3"),
@@ -626,8 +633,10 @@ mod tests {
         let mut session =
             Session::new("test".into(), ProtocolVersion::V5, SessionLimits::default());
 
-        let mut props = Properties::default();
-        props.message_expiry_interval = Some(10); // 10 seconds
+        let props = Properties {
+            message_expiry_interval: Some(10), // 10 seconds
+            ..Default::default()
+        };
         let publish = Publish::with_properties(
             "test/topic",
             bytes::Bytes::from("test"),
@@ -664,8 +673,10 @@ mod tests {
         let mut session =
             Session::new("test".into(), ProtocolVersion::V5, SessionLimits::default());
 
-        let mut props1 = Properties::default();
-        props1.message_expiry_interval = Some(1);
+        let props1 = Properties {
+            message_expiry_interval: Some(1),
+            ..Default::default()
+        };
         let publish1 = Publish::with_properties(
             "test/topic",
             bytes::Bytes::from("expires"),

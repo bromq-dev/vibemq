@@ -1123,7 +1123,13 @@ fn test_roundtrip_all_packet_types_v311() {
             properties: Properties::default(),
         })),
         {
-            let mut p = Publish::with_properties("test", Bytes::from("data"), QoS::AtLeastOnce, false, Properties::default());
+            let mut p = Publish::with_properties(
+                "test",
+                Bytes::from("data"),
+                QoS::AtLeastOnce,
+                false,
+                Properties::default(),
+            );
             p.packet_id = Some(1);
             Packet::Publish(p)
         },
@@ -1175,7 +1181,13 @@ fn test_roundtrip_all_packet_types_v5() {
             properties: Properties::default(),
         }),
         {
-            let mut p = Publish::with_properties("test", Bytes::from("data"), QoS::ExactlyOnce, true, Properties::default());
+            let mut p = Publish::with_properties(
+                "test",
+                Bytes::from("data"),
+                QoS::ExactlyOnce,
+                true,
+                Properties::default(),
+            );
             p.packet_id = Some(1);
             Packet::Publish(p)
         },

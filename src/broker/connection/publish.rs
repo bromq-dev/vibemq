@@ -100,7 +100,8 @@ where
             Ok(false) => {
                 debug!(
                     "PUBLISH denied for {} to topic {} (ACL)",
-                    client_id, publish.topic()
+                    client_id,
+                    publish.topic()
                 );
                 // For QoS > 0, send acknowledgment with error reason code
                 if publish.qos != QoS::AtMostOnce {
