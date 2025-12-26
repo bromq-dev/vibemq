@@ -27,6 +27,7 @@ use tokio::time::timeout;
 use tracing::{debug, error, warn};
 
 use crate::broker::{BrokerConfig, BrokerEvent, RetainedMessage};
+use crate::buffer_pool;
 use crate::codec::{Decoder, Encoder};
 use crate::hooks::Hooks;
 use crate::metrics::Metrics;
@@ -127,8 +128,8 @@ where
             state: State::Connecting,
             decoder: Decoder::new().with_max_packet_size(config.max_packet_size),
             encoder: Encoder::default(),
-            read_buf: BytesMut::with_capacity(4096),
-            write_buf: BytesMut::with_capacity(4096),
+            read_buf: buffer_pool::get_buffer(),
+            write_buf: buffer_pool::get_buffer(),
             sessions,
             subscriptions,
             retained,
@@ -426,6 +427,14 @@ where
                 Ok(())
             }
         }
+    }
+
+    /// Return buffers to the pool for reuse by other connections
+    pub fn return_buffers(&mut self) {
+        let read_buf = std::mem::take(&mut self.read_buf);
+        let write_buf = std::mem::take(&mut self.write_buf);
+        buffer_pool::put_buffer(read_buf);
+        buffer_pool::put_buffer(write_buf);
     }
 }
 

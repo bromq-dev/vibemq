@@ -519,28 +519,33 @@ impl Broker {
                                             metrics,
                                         );
 
-                                        let conn_fut = conn.run();
-                                        tokio::pin!(conn_fut);
+                                        {
+                                            let conn_fut = conn.run();
+                                            tokio::pin!(conn_fut);
 
-                                        loop {
-                                            tokio::select! {
-                                                biased;
+                                            loop {
+                                                tokio::select! {
+                                                    biased;
 
-                                                result = &mut conn_fut => {
-                                                    if let Err(e) = result {
-                                                        debug!("WebSocket connection error from {}: {}", addr, e);
+                                                    result = &mut conn_fut => {
+                                                        if let Err(e) = result {
+                                                            debug!("WebSocket connection error from {}: {}", addr, e);
+                                                        }
+                                                        break;
                                                     }
-                                                    break;
-                                                }
-                                                result = shutdown_rx.recv() => {
-                                                    match result {
-                                                        Ok(()) => break,
-                                                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                                                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                                                    result = shutdown_rx.recv() => {
+                                                        match result {
+                                                            Ok(()) => break,
+                                                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                                                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                                                        }
                                                     }
                                                 }
                                             }
                                         }
+
+                                        // Return buffers to the pool for reuse
+                                        conn.return_buffers();
                                     }
                                     Err(e) => {
                                         debug!("WebSocket handshake failed for {}: {}", addr, e);
@@ -618,28 +623,33 @@ impl Broker {
                                             metrics,
                                         );
 
-                                        let conn_fut = conn.run();
-                                        tokio::pin!(conn_fut);
+                                        {
+                                            let conn_fut = conn.run();
+                                            tokio::pin!(conn_fut);
 
-                                        loop {
-                                            tokio::select! {
-                                                biased;
+                                            loop {
+                                                tokio::select! {
+                                                    biased;
 
-                                                result = &mut conn_fut => {
-                                                    if let Err(e) = result {
-                                                        debug!("TLS connection error from {}: {}", addr, e);
+                                                    result = &mut conn_fut => {
+                                                        if let Err(e) = result {
+                                                            debug!("TLS connection error from {}: {}", addr, e);
+                                                        }
+                                                        break;
                                                     }
-                                                    break;
-                                                }
-                                                result = shutdown_rx.recv() => {
-                                                    match result {
-                                                        Ok(()) => break,
-                                                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                                                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                                                    result = shutdown_rx.recv() => {
+                                                        match result {
+                                                            Ok(()) => break,
+                                                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                                                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                                                        }
                                                     }
                                                 }
                                             }
                                         }
+
+                                        // Return buffers to the pool for reuse
+                                        conn.return_buffers();
                                     }
                                     Err(e) => {
                                         debug!("TLS handshake failed for {}: {}", addr, e);
@@ -866,9 +876,12 @@ impl Broker {
             );
         }
 
-        // Keep the broker running until shutdown
-        // All accept loops are spawned as separate tasks
-        std::future::pending::<()>().await;
+        // Wait for Ctrl+C to trigger graceful shutdown
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to listen for Ctrl+C");
+        info!("Received shutdown signal, shutting down...");
+        self.shutdown();
         Ok(())
     }
 
@@ -1045,37 +1058,42 @@ fn spawn_connection_handler(
         );
 
         // Pin the connection future so we can poll it repeatedly
-        let conn_fut = conn.run();
-        tokio::pin!(conn_fut);
+        {
+            let conn_fut = conn.run();
+            tokio::pin!(conn_fut);
 
-        loop {
-            tokio::select! {
-                biased;
+            loop {
+                tokio::select! {
+                    biased;
 
-                result = &mut conn_fut => {
-                    if let Err(e) = result {
-                        debug!("Connection error from {}: {}", addr, e);
+                    result = &mut conn_fut => {
+                        if let Err(e) = result {
+                            debug!("Connection error from {}: {}", addr, e);
+                        }
+                        break;
                     }
-                    break;
-                }
-                result = shutdown_rx.recv() => {
-                    match result {
-                        Ok(()) => {
-                            debug!("Connection {} shutting down", addr);
-                            break;
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                            debug!("Connection {} shutdown (channel closed)", addr);
-                            break;
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                            // Missed some messages, continue running
-                            continue;
+                    result = shutdown_rx.recv() => {
+                        match result {
+                            Ok(()) => {
+                                debug!("Connection {} shutting down", addr);
+                                break;
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                debug!("Connection {} shutdown (channel closed)", addr);
+                                break;
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                // Missed some messages, continue running
+                                continue;
+                            }
                         }
                     }
                 }
             }
         }
+
+        // Return buffers to the pool for reuse
+        conn.return_buffers();
     });
 }
 

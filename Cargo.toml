@@ -11,7 +11,7 @@ categories = ["network-programming"]
 
 [features]
 default = []
-pprof = ["dep:pprof", "dep:uuid", "dep:tikv-jemallocator", "dep:tikv-jemalloc-ctl", "dep:tikv-jemalloc-sys"]
+pprof = ["dep:pprof", "dep:uuid", "dep:tikv-jemallocator", "dep:tikv-jemalloc-ctl", "dep:tikv-jemalloc-sys", "dep:backtrace"]
 
 [dependencies]
 # Async runtime - required for high-performance I/O
@@ -27,6 +27,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Concurrent data structures
 dashmap = "5.5"
 crossbeam-channel = "0.5"
+crossbeam-queue = "0.3"
 parking_lot = "0.12"
 
 # Socket configuration
@@ -78,6 +79,7 @@ uuid = { version = "1.11", features = ["v4"], optional = true }
 tikv-jemallocator = { version = "0.6", features = ["profiling"], optional = true }
 tikv-jemalloc-ctl = { version = "0.6", features = ["stats"], optional = true }
 tikv-jemalloc-sys = { version = "0.6", features = ["profiling"], optional = true }
+backtrace = { version = "0.3.76", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
