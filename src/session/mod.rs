@@ -257,7 +257,7 @@ impl Session {
 
         // Per spec, server can disconnect after 1.5 * keep_alive
         let timeout = Duration::from_secs((self.keep_alive as u64 * 3) / 2);
-        self.last_activity.elapsed() > timeout
+        self.last_activity.elapsed() >= timeout
     }
 
     /// Queue a message for later delivery

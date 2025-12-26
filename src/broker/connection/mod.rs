@@ -24,7 +24,7 @@ use parking_lot::RwLock;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{broadcast, mpsc};
 use tokio::time::timeout;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::broker::{BrokerConfig, BrokerEvent, RetainedMessage};
 use crate::buffer_pool;
@@ -171,16 +171,29 @@ where
             }
         };
 
-        let keep_alive = {
+        let keep_alive_secs = {
             let s = session.read();
-            Duration::from_secs((s.keep_alive as u64 * 3) / 2)
+            s.keep_alive
         };
+        // Calculate 1.5x keep_alive timeout (0 means disabled)
+        let keep_alive = if keep_alive_secs > 0 {
+            Duration::from_millis(keep_alive_secs as u64 * 1500)
+        } else {
+            Duration::from_secs(u64::MAX) // Effectively disabled
+        };
+        info!(
+            "Keep alive for {}: {}s -> timeout {:?}",
+            client_id, keep_alive_secs, keep_alive
+        );
 
         // Create retry ticker for unacked QoS 1/2 messages
         let retry_interval = self.config.retry_interval;
         let mut retry_ticker = tokio::time::interval(retry_interval);
         // Skip the first immediate tick
         retry_ticker.tick().await;
+
+        // Track keep-alive deadline (reset when packets received)
+        let mut keep_alive_deadline = tokio::time::Instant::now() + keep_alive;
 
         loop {
             tokio::select! {
@@ -198,11 +211,12 @@ where
                             while let Some((packet, consumed)) = self.decoder.decode(&self.read_buf)? {
                                 self.read_buf.advance(consumed);
 
-                                // Update activity timestamp
+                                // Update activity timestamp and reset keep-alive deadline
                                 {
                                     let mut s = session.write();
                                     s.touch();
                                 }
+                                keep_alive_deadline = tokio::time::Instant::now() + keep_alive;
 
                                 if let Err(e) = self.handle_packet(&client_id, &session, packet).await {
                                     match &e {
@@ -244,16 +258,22 @@ where
                 }
 
                 // Keep alive timeout
-                _ = tokio::time::sleep(keep_alive) => {
-                    let expired = {
-                        let s = session.read();
-                        s.is_keep_alive_expired()
-                    };
-                    if expired {
-                        debug!("Keep alive timeout for {}", client_id);
-                        self.handle_disconnect(&client_id, &session, true).await;
-                        return Err(ConnectionError::Timeout);
+                _ = tokio::time::sleep_until(keep_alive_deadline) => {
+                    info!("Keep alive timeout for {} - disconnecting", client_id);
+                    // For MQTT v5, send DISCONNECT with KeepAliveTimeout reason before closing
+                    if self.decoder.protocol_version() == Some(crate::protocol::ProtocolVersion::V5) {
+                        let disconnect = crate::protocol::Disconnect {
+                            reason_code: crate::protocol::ReasonCode::KeepAliveTimeout,
+                            properties: crate::protocol::Properties::default(),
+                        };
+                        self.write_buf.clear();
+                        if self.encoder.encode(&Packet::Disconnect(disconnect), &mut self.write_buf).is_ok() {
+                            let _ = self.stream.write_all(&self.write_buf).await;
+                            let _ = self.stream.flush().await;
+                        }
                     }
+                    self.handle_disconnect(&client_id, &session, true).await;
+                    return Err(ConnectionError::Timeout);
                 }
             }
         }

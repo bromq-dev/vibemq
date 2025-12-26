@@ -22,22 +22,57 @@ where
     pub(crate) async fn read_connect(&mut self) -> Result<(), ConnectionError> {
         loop {
             // Try to decode a packet from the buffer
-            if let Some((packet, consumed)) = self.decoder.decode(&self.read_buf)? {
-                self.read_buf.advance(consumed);
+            match self.decoder.decode(&self.read_buf) {
+                Ok(Some((packet, consumed))) => {
+                    self.read_buf.advance(consumed);
 
-                match packet {
-                    Packet::Connect(connect) => {
-                        return self.handle_connect(*connect).await;
+                    match packet {
+                        Packet::Connect(connect) => {
+                            return self.handle_connect(*connect).await;
+                        }
+                        _ => {
+                            // Protocol violation - first packet must be CONNECT
+                            debug!("First packet from {} was not CONNECT", self.addr);
+                            return Err(ConnectionError::Protocol(
+                                crate::protocol::ProtocolError::ProtocolViolation(
+                                    "first packet must be CONNECT",
+                                ),
+                            ));
+                        }
                     }
-                    _ => {
-                        // Protocol violation - first packet must be CONNECT
-                        debug!("First packet from {} was not CONNECT", self.addr);
-                        return Err(ConnectionError::Protocol(
-                            crate::protocol::ProtocolError::ProtocolViolation(
-                                "first packet must be CONNECT",
-                            ),
-                        ));
+                }
+                Ok(None) => {
+                    // Need more data
+                }
+                Err(e) => {
+                    // For MQTT v5, send CONNACK with error before closing
+                    if self.decoder.protocol_version() == Some(ProtocolVersion::V5) {
+                        let reason_code = match &e {
+                            crate::protocol::DecodeError::InvalidProtocolVersion(_) => {
+                                ReasonCode::UnsupportedProtocolVersion
+                            }
+                            crate::protocol::DecodeError::MalformedPacket(_) => {
+                                ReasonCode::MalformedPacket
+                            }
+                            _ => ReasonCode::MalformedPacket,
+                        };
+                        self.encoder.set_protocol_version(ProtocolVersion::V5);
+                        let connack = ConnAck {
+                            session_present: false,
+                            reason_code,
+                            properties: Properties::default(),
+                        };
+                        let mut buf = bytes::BytesMut::new();
+                        if self
+                            .encoder
+                            .encode(&Packet::ConnAck(connack), &mut buf)
+                            .is_ok()
+                        {
+                            let _ = self.stream.write_all(&buf).await;
+                            let _ = self.stream.flush().await;
+                        }
                     }
+                    return Err(e.into());
                 }
             }
 
