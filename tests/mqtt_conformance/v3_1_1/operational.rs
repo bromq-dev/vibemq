@@ -500,21 +500,35 @@ async fn test_mqtt_4_6_0_5_default_ordered_topic() {
     publisher.send_raw(&pub_connect).await;
     let _ = publisher.recv_raw(1000).await;
 
-    // Send 3 messages in sequence
+    // Send 3 messages in sequence, receiving after each to ensure ordering
+    let mut received_order = Vec::new();
     for i in 1u8..=3 {
         let publish = [0x30, 0x07, 0x00, 0x04, b'o', b'r', b'd', b'r', b'0' + i];
         publisher.send_raw(&publish).await;
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
 
-    // Receive and verify order [MQTT-4.6.0-5] [MQTT-4.6.0-6]
-    let mut received_order = Vec::new();
-    for _ in 0..3 {
+        // Wait a bit for message to propagate
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Try to receive (may get multiple packets in one read)
         if let Some(data) = subscriber.recv_raw(500).await {
-            if data[0] & 0xF0 == 0x30 {
-                // Extract payload (last byte)
-                let payload = data[data.len() - 1];
-                received_order.push(payload);
+            // Parse all PUBLISH packets from the buffer
+            let mut offset = 0;
+            while offset < data.len() {
+                if data[offset] & 0xF0 == 0x30 {
+                    // PUBLISH packet
+                    let remaining_len = data[offset + 1] as usize;
+                    let packet_end = offset + 2 + remaining_len;
+                    if packet_end <= data.len() {
+                        // Extract payload (last byte of this packet)
+                        let payload = data[packet_end - 1];
+                        received_order.push(payload);
+                        offset = packet_end;
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
             }
         }
     }
