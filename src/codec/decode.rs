@@ -151,6 +151,11 @@ impl Decoder {
         let password_flag = (connect_flags & 0x40) != 0;
         let username_flag = (connect_flags & 0x80) != 0;
 
+        // [MQTT-3.1.2-22] If username flag is 0, password flag must be 0
+        if !username_flag && password_flag {
+            return Err(DecodeError::InvalidFlags);
+        }
+
         // Validate will QoS
         if will_qos > 2 {
             return Err(DecodeError::InvalidQoS(will_qos));
@@ -527,6 +532,11 @@ impl Decoder {
             let (filter, len) = read_string(&payload[pos..])?;
             pos += len;
 
+            // [MQTT-4.7.0-1] Topic filter cannot be empty
+            if filter.is_empty() {
+                return Err(DecodeError::MalformedPacket("topic filter cannot be empty"));
+            }
+
             if pos >= payload.len() {
                 return Err(DecodeError::InsufficientData);
             }
@@ -653,6 +663,12 @@ impl Decoder {
         while pos < payload.len() {
             let (filter, len) = read_string(&payload[pos..])?;
             pos += len;
+
+            // [MQTT-4.7.0-1] Topic filter cannot be empty
+            if filter.is_empty() {
+                return Err(DecodeError::MalformedPacket("topic filter cannot be empty"));
+            }
+
             filters.push(filter.to_string());
         }
 

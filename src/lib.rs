@@ -7,6 +7,7 @@ pub mod acl;
 pub mod auth;
 pub mod bridge;
 pub mod broker;
+pub mod buffer_pool;
 pub mod cluster;
 pub mod codec;
 pub mod config;
