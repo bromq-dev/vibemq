@@ -29,9 +29,11 @@ const TCP_BACKLOG: i32 = 4096;
 
 use crate::bridge::BridgeManager;
 use crate::cluster::ClusterManager;
+use crate::config::ProxyProtocolConfig;
 use crate::hooks::{DefaultHooks, Hooks};
 use crate::metrics::Metrics;
 use crate::protocol::{Packet, Properties, ProtocolVersion, Publish, QoS};
+use crate::proxy::{parse_proxy_header, ProxyInfo};
 use crate::session::SessionStore;
 use crate::topic::SubscriptionStore;
 use crate::transport::WsStream;
@@ -95,6 +97,12 @@ pub struct BrokerConfig {
     /// Topic levels are separated by '/'. For example, "a/b/c" has 3 levels.
     /// 0 = unlimited.
     pub max_topic_levels: usize,
+    /// PROXY protocol configuration for TCP listener
+    pub proxy_protocol: ProxyProtocolConfig,
+    /// PROXY protocol configuration for TLS listener
+    pub tls_proxy_protocol: ProxyProtocolConfig,
+    /// PROXY protocol configuration for WebSocket listener
+    pub ws_proxy_protocol: ProxyProtocolConfig,
 }
 
 /// TLS configuration for the broker
@@ -139,6 +147,9 @@ impl Default for BrokerConfig {
             retry_interval: Duration::from_secs(30),
             outbound_channel_capacity: 1024,
             max_topic_levels: 0, // 0 = unlimited
+            proxy_protocol: ProxyProtocolConfig::default(),
+            tls_proxy_protocol: ProxyProtocolConfig::default(),
+            ws_proxy_protocol: ProxyProtocolConfig::default(),
         }
     }
 }
@@ -489,7 +500,7 @@ impl Broker {
             tokio::spawn(async move {
                 loop {
                     match ws_listener.accept().await {
-                        Ok((stream, addr)) => {
+                        Ok((mut stream, addr)) => {
                             debug!("New WebSocket connection from {}", addr);
                             let sessions = sessions.clone();
                             let subscriptions = subscriptions.clone();
@@ -502,13 +513,43 @@ impl Broker {
                             let mut shutdown_rx = shutdown.subscribe();
 
                             tokio::spawn(async move {
+                                // Handle PROXY protocol before WebSocket handshake if enabled
+                                let (effective_addr, proxy_info) =
+                                    if config.ws_proxy_protocol.enabled {
+                                        match parse_proxy_header(
+                                            &mut stream,
+                                            config.ws_proxy_protocol.timeout_duration(),
+                                            config.ws_proxy_protocol.tls_termination,
+                                        )
+                                        .await
+                                        {
+                                            Ok((info, _remaining)) => {
+                                                debug!(
+                                                    "PROXY protocol (WS): {} -> {} (v{:?})",
+                                                    addr, info.client_addr, info.version
+                                                );
+                                                (info.client_addr, Some(info))
+                                            }
+                                            Err(e) => {
+                                                debug!("PROXY protocol error from {}: {}", addr, e);
+                                                return;
+                                            }
+                                        }
+                                    } else {
+                                        (addr, None)
+                                    };
+
                                 // Perform WebSocket handshake with path validation
                                 match WsStream::accept_with_path(stream, &config.ws_path).await {
                                     Ok(ws_stream) => {
-                                        debug!("WebSocket handshake complete for {}", addr);
+                                        debug!(
+                                            "WebSocket handshake complete for {}",
+                                            effective_addr
+                                        );
                                         let mut conn = Connection::new(
                                             ws_stream,
-                                            addr,
+                                            effective_addr,
+                                            proxy_info,
                                             sessions,
                                             subscriptions,
                                             retained,
@@ -529,7 +570,7 @@ impl Broker {
 
                                                     result = &mut conn_fut => {
                                                         if let Err(e) = result {
-                                                            debug!("WebSocket connection error from {}: {}", addr, e);
+                                                            debug!("WebSocket connection error from {}: {}", effective_addr, e);
                                                         }
                                                         break;
                                                     }
@@ -548,7 +589,10 @@ impl Broker {
                                         conn.return_buffers();
                                     }
                                     Err(e) => {
-                                        debug!("WebSocket handshake failed for {}: {}", addr, e);
+                                        debug!(
+                                            "WebSocket handshake failed for {}: {}",
+                                            effective_addr, e
+                                        );
                                     }
                                 }
                             });
@@ -592,7 +636,7 @@ impl Broker {
             tokio::spawn(async move {
                 loop {
                     match tls_listener.accept().await {
-                        Ok((stream, addr)) => {
+                        Ok((mut stream, addr)) => {
                             debug!("New TLS connection from {}", addr);
                             let sessions = sessions.clone();
                             let subscriptions = subscriptions.clone();
@@ -606,13 +650,40 @@ impl Broker {
                             let mut shutdown_rx = shutdown.subscribe();
 
                             tokio::spawn(async move {
+                                // Handle PROXY protocol before TLS handshake if enabled
+                                let (effective_addr, proxy_info) =
+                                    if config.tls_proxy_protocol.enabled {
+                                        match parse_proxy_header(
+                                            &mut stream,
+                                            config.tls_proxy_protocol.timeout_duration(),
+                                            config.tls_proxy_protocol.tls_termination,
+                                        )
+                                        .await
+                                        {
+                                            Ok((info, _remaining)) => {
+                                                debug!(
+                                                    "PROXY protocol (TLS): {} -> {} (v{:?})",
+                                                    addr, info.client_addr, info.version
+                                                );
+                                                (info.client_addr, Some(info))
+                                            }
+                                            Err(e) => {
+                                                debug!("PROXY protocol error from {}: {}", addr, e);
+                                                return;
+                                            }
+                                        }
+                                    } else {
+                                        (addr, None)
+                                    };
+
                                 // Perform TLS handshake
                                 match tls_acceptor.accept(stream).await {
                                     Ok(tls_stream) => {
-                                        debug!("TLS handshake complete for {}", addr);
+                                        debug!("TLS handshake complete for {}", effective_addr);
                                         let mut conn = Connection::new(
                                             tls_stream,
-                                            addr,
+                                            effective_addr,
+                                            proxy_info,
                                             sessions,
                                             subscriptions,
                                             retained,
@@ -633,7 +704,7 @@ impl Broker {
 
                                                     result = &mut conn_fut => {
                                                         if let Err(e) = result {
-                                                            debug!("TLS connection error from {}: {}", addr, e);
+                                                            debug!("TLS connection error from {}: {}", effective_addr, e);
                                                         }
                                                         break;
                                                     }
@@ -652,7 +723,10 @@ impl Broker {
                                         conn.return_buffers();
                                     }
                                     Err(e) => {
-                                        debug!("TLS handshake failed for {}: {}", addr, e);
+                                        debug!(
+                                            "TLS handshake failed for {}: {}",
+                                            effective_addr, e
+                                        );
                                     }
                                 }
                             });
@@ -901,11 +975,38 @@ impl Broker {
             debug!("Starting TCP accept loop");
             loop {
                 match listener.accept().await {
-                    Ok((stream, addr)) => {
+                    Ok((mut stream, addr)) => {
                         debug!("New TCP connection from {}", addr);
+
+                        // Handle PROXY protocol if enabled
+                        let (effective_addr, proxy_info) = if config.proxy_protocol.enabled {
+                            match parse_proxy_header(
+                                &mut stream,
+                                config.proxy_protocol.timeout_duration(),
+                                config.proxy_protocol.tls_termination,
+                            )
+                            .await
+                            {
+                                Ok((info, _remaining)) => {
+                                    debug!(
+                                        "PROXY protocol: {} -> {} (v{:?})",
+                                        addr, info.client_addr, info.version
+                                    );
+                                    (info.client_addr, Some(info))
+                                }
+                                Err(e) => {
+                                    debug!("PROXY protocol error from {}: {}", addr, e);
+                                    continue;
+                                }
+                            }
+                        } else {
+                            (addr, None)
+                        };
+
                         spawn_connection_handler(
                             stream,
-                            addr,
+                            effective_addr,
+                            proxy_info,
                             sessions.clone(),
                             subscriptions.clone(),
                             retained.clone(),
@@ -1031,6 +1132,7 @@ impl Default for Broker {
 fn spawn_connection_handler(
     stream: TcpStream,
     addr: SocketAddr,
+    proxy_info: Option<ProxyInfo>,
     sessions: Arc<SessionStore>,
     subscriptions: Arc<SubscriptionStore>,
     retained: Arc<DashMap<String, RetainedMessage>>,
@@ -1047,6 +1149,7 @@ fn spawn_connection_handler(
         let mut conn = Connection::new(
             stream,
             addr,
+            proxy_info,
             sessions,
             subscriptions,
             retained,

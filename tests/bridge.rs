@@ -14,6 +14,7 @@ use tokio::time::timeout;
 use vibemq::bridge::{BridgeConfig, ForwardDirection, ForwardRule, LoopPrevention};
 use vibemq::broker::{Broker, BrokerConfig};
 use vibemq::codec::{Decoder, Encoder};
+use vibemq::config::ProxyProtocolConfig;
 use vibemq::protocol::{
     Connect, Packet, Properties, ProtocolVersion, Publish, QoS, ReasonCode, Subscribe,
     Subscription, SubscriptionOptions,
@@ -55,6 +56,9 @@ fn test_broker_config(port: u16) -> BrokerConfig {
         retry_interval: Duration::from_secs(30),
         outbound_channel_capacity: 1024,
         max_topic_levels: 0,
+        proxy_protocol: ProxyProtocolConfig::default(),
+        tls_proxy_protocol: ProxyProtocolConfig::default(),
+        ws_proxy_protocol: ProxyProtocolConfig::default(),
     }
 }
 

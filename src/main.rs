@@ -293,6 +293,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             file_config.limits.outbound_channel_capacity
         },
         max_topic_levels: file_config.limits.max_topic_levels,
+        proxy_protocol: file_config.server.proxy_protocol.clone(),
+        tls_proxy_protocol: file_config.server.tls_proxy_protocol.clone(),
+        ws_proxy_protocol: file_config.server.ws_proxy_protocol.clone(),
     };
 
     info!("Starting VibeMQ MQTT Broker");
@@ -333,6 +336,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     } else {
         info!("  ACL: disabled");
+    }
+
+    // Log PROXY protocol status
+    if broker_config.proxy_protocol.enabled {
+        info!(
+            "  PROXY protocol (TCP): enabled{}",
+            if broker_config.proxy_protocol.tls_termination {
+                " (TLS termination)"
+            } else {
+                ""
+            }
+        );
+    }
+    if broker_config.tls_proxy_protocol.enabled {
+        info!(
+            "  PROXY protocol (TLS): enabled{}",
+            if broker_config.tls_proxy_protocol.tls_termination {
+                " (TLS termination)"
+            } else {
+                ""
+            }
+        );
+    }
+    if broker_config.ws_proxy_protocol.enabled {
+        info!(
+            "  PROXY protocol (WebSocket): enabled{}",
+            if broker_config.ws_proxy_protocol.tls_termination {
+                " (TLS termination)"
+            } else {
+                ""
+            }
+        );
     }
 
     // Create auth and ACL providers

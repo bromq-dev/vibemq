@@ -16,8 +16,9 @@ use parking_lot::RwLock;
 use tokio::net::TcpListener;
 use tracing::{debug, error, info, warn};
 
-use crate::config::ClusterConfig;
+use crate::config::{ClusterConfig, ProxyProtocolConfig};
 use crate::protocol::QoS;
+use crate::proxy::parse_proxy_header;
 use crate::remote::RemotePeer;
 use crate::remote::RemotePeerStatus;
 
@@ -214,9 +215,17 @@ impl ClusterManager {
         let inbound_callback = self.inbound_callback.clone();
         let local_node_id = self.node_id.clone();
         let local_subs = self.local_subscriptions.clone();
+        let proxy_config = self.config.proxy_protocol.clone();
 
         tokio::spawn(async move {
-            Self::peer_listener_loop(listener, inbound_callback, local_node_id, local_subs).await;
+            Self::peer_listener_loop(
+                listener,
+                inbound_callback,
+                local_node_id,
+                local_subs,
+                proxy_config,
+            )
+            .await;
         });
 
         // Spawn gossip watcher (discovers new peers, connects to them)
@@ -252,21 +261,54 @@ impl ClusterManager {
         inbound_callback: ClusterInboundCallback,
         local_node_id: String,
         local_subs: Arc<RwLock<HashSet<String>>>,
+        proxy_config: ProxyProtocolConfig,
     ) {
         loop {
             match listener.accept().await {
-                Ok((stream, addr)) => {
+                Ok((mut stream, addr)) => {
                     debug!("Incoming cluster peer connection from {}", addr);
 
                     let callback = inbound_callback.clone();
                     let node_id = local_node_id.clone();
                     let subs = local_subs.clone();
+                    let proxy_config = proxy_config.clone();
 
                     tokio::spawn(async move {
+                        // Handle PROXY protocol if enabled
+                        let effective_addr = if proxy_config.enabled {
+                            match parse_proxy_header(
+                                &mut stream,
+                                proxy_config.timeout_duration(),
+                                proxy_config.tls_termination,
+                            )
+                            .await
+                            {
+                                Ok((info, _remaining)) => {
+                                    debug!(
+                                        "PROXY protocol (cluster): {} -> {} (v{:?})",
+                                        addr, info.client_addr, info.version
+                                    );
+                                    info.client_addr
+                                }
+                                Err(e) => {
+                                    debug!(
+                                        "PROXY protocol error from cluster peer {}: {}",
+                                        addr, e
+                                    );
+                                    return;
+                                }
+                            }
+                        } else {
+                            addr
+                        };
+
                         if let Err(e) =
                             Self::handle_incoming_peer(stream, callback, node_id, subs).await
                         {
-                            debug!("Incoming peer connection error: {}", e);
+                            debug!(
+                                "Incoming peer connection error from {}: {}",
+                                effective_addr, e
+                            );
                         }
                     });
                 }

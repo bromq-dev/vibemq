@@ -16,6 +16,7 @@ pub mod metrics;
 #[cfg(feature = "pprof")]
 pub mod profiling;
 pub mod protocol;
+pub mod proxy;
 pub mod remote;
 pub mod session;
 pub mod topic;

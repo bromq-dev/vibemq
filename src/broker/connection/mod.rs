@@ -32,6 +32,7 @@ use crate::codec::{Decoder, Encoder};
 use crate::hooks::Hooks;
 use crate::metrics::Metrics;
 use crate::protocol::Packet;
+use crate::proxy::ProxyInfo;
 use crate::session::{Session, SessionStore};
 use crate::topic::SubscriptionStore;
 
@@ -101,6 +102,9 @@ pub struct Connection<S> {
     pub(crate) metrics: Option<Arc<Metrics>>,
     /// Username from CONNECT packet (for ACL checks)
     pub(crate) username: Option<String>,
+    /// PROXY protocol info (if connection came through a proxy)
+    #[allow(dead_code)]
+    pub(crate) proxy_info: Option<ProxyInfo>,
 }
 
 impl<S> Connection<S>
@@ -111,6 +115,7 @@ where
     pub fn new(
         stream: S,
         addr: SocketAddr,
+        proxy_info: Option<ProxyInfo>,
         sessions: Arc<SessionStore>,
         subscriptions: Arc<SubscriptionStore>,
         retained: Arc<DashMap<String, RetainedMessage>>,
@@ -141,6 +146,7 @@ where
             hooks,
             metrics,
             username: None,
+            proxy_info,
         }
     }
 
