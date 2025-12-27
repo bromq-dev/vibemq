@@ -1435,6 +1435,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ppp"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a7a2049cd2570bd67bf0228e86bf850f8ceb5190a345c471d03a909da6049e0"
+dependencies = [
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "pprof"
 version = "0.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2597,6 +2606,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "parking_lot",
+ "ppp",
  "pprof",
  "pretty_assertions",
  "prometheus",

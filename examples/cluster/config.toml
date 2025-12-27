@@ -1,9 +1,24 @@
 # VibeMQ Cluster Configuration
-# Shared by all replicas - Docker DNS resolves "vibemq" to all container IPs
+#
+# All nodes share this config. Docker DNS resolves "vibemq" to all container IPs.
+# HAProxy load balances client traffic with PROXY protocol for real client IPs.
+
+[log]
+level = "info"
 
 [auth]
+enabled = false
 allow_anonymous = true
 
+[acl]
+enabled = false
+
+# Enable PROXY protocol on MQTT listener (HAProxy sends real client IP)
+[server.proxy_protocol]
+enabled = true
+timeout = 5
+
+# Cluster configuration
 [[cluster]]
 enabled = true
 gossip_addr = "0.0.0.0:7946"
@@ -11,6 +26,7 @@ peer_addr = "0.0.0.0:7947"
 # Docker Compose DNS resolves service name to all replica IPs
 seeds = ["vibemq:7946"]
 
+# Metrics and health endpoint for HAProxy health checks
 [metrics]
 enabled = true
 bind = "0.0.0.0:9090"

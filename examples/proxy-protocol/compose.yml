@@ -1,8 +1,7 @@
-# VibeMQ Cluster with HAProxy Load Balancer
+# PROXY Protocol Example
 #
-# Architecture:
-#   Clients -> HAProxy (L4 LB with PROXY protocol) -> VibeMQ cluster nodes
-#   VibeMQ nodes communicate directly via gossip (UDP) and peer connections (TCP)
+# Demonstrates VibeMQ behind HAProxy with PROXY protocol enabled.
+# HAProxy sends real client IP via PROXY protocol v2 headers.
 #
 # Usage:
 #   docker compose up -d
@@ -14,14 +13,15 @@ configs:
   haproxy_cfg:
     file: ./haproxy.cfg
   vibemq_toml:
-    file: ./config.toml
+    file: ./vibemq.toml
 
 services:
   haproxy:
     image: haproxy:3.3-alpine
     ports:
-      - "1883:1883"   # MQTT through load balancer
-      - "8404:8404"   # HAProxy stats
+      - "1883:1883" # MQTT through proxy
+      - "9001:9001" # WebSocket through proxy
+      - "8404:8404" # HAProxy stats
     configs:
       - source: haproxy_cfg
         target: /usr/local/etc/haproxy/haproxy.cfg
@@ -34,19 +34,18 @@ services:
     image: ghcr.io/vibesrc/vibemq:latest
     build:
       context: ../..
-    deploy:
-      replicas: 3
+      dockerfile: Dockerfile
     configs:
       - source: vibemq_toml
-        target: /etc/vibemq/config.toml
-    command: ["-c", "/etc/vibemq/config.toml"]
+        target: /etc/vibemq/vibemq.toml
+    command: ["-c", "/etc/vibemq/vibemq.toml"]
     networks:
       - mqtt
+    # Internal ports - clients connect through HAProxy
     expose:
-      - "1883"  # MQTT (internal, via HAProxy)
-      - "7946"  # Gossip (UDP)
-      - "7947"  # Peer connections (TCP)
-      - "9090"  # Metrics/health
+      - "1883"
+      - "9001"
+      - "9090"  # Metrics/health endpoint for HAProxy checks
 
 networks:
   mqtt:

@@ -22,6 +22,7 @@ use tokio::net::TcpStream;
 use tokio::time::timeout;
 
 use vibemq::broker::{Broker, BrokerConfig};
+use vibemq::config::ProxyProtocolConfig;
 use vibemq::protocol::QoS;
 
 static PORT_COUNTER: AtomicU16 = AtomicU16::new(21000);
@@ -58,6 +59,9 @@ pub fn test_config(port: u16) -> BrokerConfig {
         retry_interval: Duration::from_secs(30),
         outbound_channel_capacity: 1024,
         max_topic_levels: 0,
+        proxy_protocol: ProxyProtocolConfig::default(),
+        tls_proxy_protocol: ProxyProtocolConfig::default(),
+        ws_proxy_protocol: ProxyProtocolConfig::default(),
     }
 }
 

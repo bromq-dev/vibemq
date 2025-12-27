@@ -1,0 +1,39 @@
+# VibeMQ configuration with PROXY protocol enabled
+#
+# This config enables PROXY protocol parsing on both TCP and WebSocket listeners.
+# Real client IPs from HAProxy are used for logging and access control.
+
+[log]
+level = "info"
+
+[server]
+bind = "0.0.0.0:1883"
+ws_bind = "0.0.0.0:9001"
+ws_path = "/mqtt"
+
+# Enable PROXY protocol on TCP listener
+[server.proxy_protocol]
+enabled = true
+tls_termination = false
+timeout = 5
+
+# Enable PROXY protocol on WebSocket listener
+[server.ws_proxy_protocol]
+enabled = true
+tls_termination = false
+timeout = 5
+
+[auth]
+enabled = false
+allow_anonymous = true
+
+[acl]
+enabled = false
+
+[acl.default]
+publish = ["#"]
+subscribe = ["#", "$SYS/#"]
+
+[metrics]
+enabled = true
+bind = "0.0.0.0:9090"

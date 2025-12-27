@@ -27,6 +27,28 @@ ws_path = "/mqtt"
 # Number of worker threads (0 = auto, uses CPU count)
 workers = 0
 
+# PROXY Protocol Configuration (HAProxy PROXY protocol v1/v2)
+# Enable when running behind a load balancer that sends PROXY headers.
+# This preserves real client IP addresses through the proxy layer.
+#
+# [server.proxy_protocol]
+# enabled = true                # Enable PROXY protocol parsing on TCP listener
+# tls_termination = false       # Trust TLS info from PROXY v2 TLVs (SNI, client cert CN)
+# timeout = 5                   # Seconds to wait for PROXY header
+#
+# # WebSocket listener proxy protocol (separate config)
+# [server.ws_proxy_protocol]
+# enabled = true
+# tls_termination = true        # Enable if proxy handles TLS/SNI
+# timeout = 5
+#
+# # TLS listener proxy protocol
+# # Note: PROXY header is parsed BEFORE TLS handshake
+# [server.tls_proxy_protocol]
+# enabled = true
+# tls_termination = false       # TLS handled by broker, not proxy
+# timeout = 5
+
 [limits]
 # Note: Set any limit to 0 for unbounded
 

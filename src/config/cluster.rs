@@ -7,6 +7,8 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
+use super::ProxyProtocolConfig;
+
 /// Cluster configuration for gossip-based horizontal scaling
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
@@ -54,6 +56,10 @@ pub struct ClusterConfig {
     /// Default: 30
     #[serde(default = "default_dead_node_grace_period")]
     pub dead_node_grace_period: u64,
+
+    /// PROXY protocol configuration for peer listener
+    #[serde(default)]
+    pub proxy_protocol: ProxyProtocolConfig,
 }
 
 fn default_gossip_addr() -> SocketAddr {
@@ -89,6 +95,7 @@ impl Default for ClusterConfig {
             gossip_interval: default_gossip_interval(),
             failure_timeout: default_failure_timeout(),
             dead_node_grace_period: default_dead_node_grace_period(),
+            proxy_protocol: ProxyProtocolConfig::default(),
         }
     }
 }

@@ -1,121 +1,158 @@
 # VibeMQ Cluster Example
 
-This example demonstrates horizontal clustering with 3 VibeMQ nodes.
+This example demonstrates horizontal clustering with VibeMQ nodes behind a load balancer.
 
-## Kubernetes with HPA
+## Architecture
 
-For Kubernetes deployments with autoscaling, see `kubernetes.yaml`:
-
-```bash
-kubectl apply -f kubernetes.yaml
-kubectl get pods -l app=vibemq -w
+```
+                    ┌─────────────┐
+   Clients ────────►│   HAProxy   │
+                    │   (L4 LB)   │
+                    └──────┬──────┘
+                           │ PROXY protocol v2
+              ┌────────────┼────────────┐
+              ▼            ▼            ▼
+         ┌────────┐   ┌────────┐   ┌────────┐
+         │VibeMQ 1│◄─►│VibeMQ 2│◄─►│VibeMQ 3│
+         └────────┘   └────────┘   └────────┘
+              │            │            │
+              └────────────┴────────────┘
+                   Gossip + Peer TCP
 ```
 
-The cluster uses a headless service (`vibemq-headless`) for node discovery. Chitchat resolves the DNS name to all pod IPs automatically and refreshes every 60 seconds.
+- **HAProxy** load balances MQTT clients with PROXY protocol for real client IPs
+- **Gossip (UDP 7946)** for node discovery via chitchat protocol
+- **Peer TCP (7947)** for message forwarding between nodes
+- **Metrics (9090)** for health checks and Prometheus scraping
+
+## Kubernetes (kind)
+
+For local testing with [kind](https://kind.sigs.k8s.io/):
+
+```bash
+# Create cluster with port mappings
+kind create cluster --name vibemq --config kind-config.yaml
+
+# Build and load VibeMQ image
+docker build -t vibemq:latest ../..
+kind load docker-image vibemq:latest --name vibemq
+
+# Deploy
+kubectl apply -f kubernetes.yaml
+kubectl scale deployment vibemq --replicas=3
+
+# Wait for pods
+kubectl get pods -l app=vibemq -w
+
+# Test - connects directly, no port-forward needed!
+mosquitto_pub -h localhost -p 1883 -t test -m "hello"
+curl localhost:9090/health
+
+# Check cluster formed
+kubectl logs -l app=vibemq | grep "cluster peer"
+
+# Clean up
+kind delete cluster --name vibemq
+```
+
+## Kubernetes (Cloud)
+
+For cloud deployments with a LoadBalancer that supports PROXY protocol:
+
+1. Edit `kubernetes.yaml`:
+   - Change Service type to `LoadBalancer`
+   - Add cloud-specific annotations for PROXY protocol
+   - Uncomment `[server.proxy_protocol]` in the ConfigMap
+
+Example for AWS NLB:
+```yaml
+metadata:
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-proxy-protocol: "*"
+spec:
+  type: LoadBalancer
+```
 
 ## Docker Compose
 
-### Architecture
-
-```
-         ┌─────────────────────────────────────────┐
-         │              Gossip Network             │
-         │         (UDP, chitchat protocol)        │
-         └─────────────────────────────────────────┘
-                    ▲           ▲           ▲
-                    │           │           │
-              ┌─────┴─────┬─────┴─────┬─────┴─────┐
-              │           │           │           │
-         ┌────▼────┐ ┌────▼────┐ ┌────▼────┐      │
-         │  node1  │ │  node2  │ │  node3  │      │
-         │ :1883   │ │ :1884   │ │ :1885   │      │
-         │ :7946   │ │         │ │         │      │
-         │ :7947   │ │         │ │         │      │
-         └─────────┘ └─────────┘ └─────────┘      │
-              │           │           │           │
-              └───────────┴───────────┴───────────┘
-                    Peer TCP (bincode messages)
-```
-
-## Running
-
 ```bash
-# Start the cluster
+# Start cluster with HAProxy
 docker compose up --build
 
-# In another terminal, subscribe on node1
-mosquitto_sub -h localhost -p 1883 -t "test/#" -v
+# Test through load balancer
+mosquitto_pub -h localhost -p 1883 -t test -m "hello"
 
-# In another terminal, publish on node2
-mosquitto_pub -h localhost -p 1884 -t "test/hello" -m "Hello from node2!"
+# Check HAProxy stats
+open http://localhost:8404/stats
 
-# The message should appear in the subscriber connected to node1
+# Check cluster formed
+docker compose logs vibemq | grep "cluster peer"
 ```
-
-## Ports
-
-| Node  | MQTT  | Gossip | Peer |
-|-------|-------|--------|------|
-| node1 | 1883  | 7946   | 7947 |
-| node2 | 1884  | -      | -    |
-| node3 | 1885  | -      | -    |
-
-(Only node1 exposes gossip/peer ports externally; internal Docker networking handles inter-node communication)
 
 ## How It Works
 
-1. **Node Discovery**: Nodes use the chitchat gossip protocol to discover each other
+1. **Node Discovery**: Nodes use chitchat gossip protocol to discover each other
 2. **Subscription Sync**: Each node advertises its subscriptions via gossip state
-3. **Message Routing**: When a message is published, it's forwarded to nodes with matching subscriptions
+3. **Message Routing**: Messages are forwarded to nodes with matching subscriptions
 4. **Loop Prevention**: Messages include origin node ID to prevent infinite loops
+5. **Client IP Preservation**: HAProxy sends real client IP via PROXY protocol
 
 ## Configuration
 
-Each node has a `nodeN.toml` config file:
-
 ```toml
+# Enable PROXY protocol for load balancer
+[server.proxy_protocol]
+enabled = true
+timeout = 5
+
+# Cluster configuration
 [[cluster]]
 enabled = true
-node_id = "node1"           # Unique node identifier
-gossip_addr = "0.0.0.0:7946" # UDP port for gossip
-peer_addr = "0.0.0.0:7947"   # TCP port for message relay
-seeds = ["node1:7946"]       # Initial peers to contact
+gossip_addr = "0.0.0.0:7946"
+peer_addr = "0.0.0.0:7947"
+seeds = ["vibemq-headless:7946"]  # Headless service for discovery
+
+# Health endpoint for load balancer
+[metrics]
+enabled = true
+bind = "0.0.0.0:9090"
 ```
 
-## Testing Scenarios
+## Testing
 
-### Basic Pub/Sub Across Nodes
+### Cross-Node Pub/Sub
 ```bash
-# Terminal 1: Subscribe on node1
-mosquitto_sub -h localhost -p 1883 -t "#" -v
+# Subscribe (connects to any node via LB)
+mosquitto_sub -h localhost -p 1883 -t "test/#" -v &
 
-# Terminal 2: Publish on node3
-mosquitto_pub -h localhost -p 1885 -t "sensors/temp" -m "25.5"
+# Publish (may hit different node)
+mosquitto_pub -h localhost -p 1883 -t "test/hello" -m "Hello!"
+
+# Message appears regardless of which nodes handle sub/pub
 ```
 
-### Retained Messages
+### Health Check
 ```bash
-# Publish retained on node2
-mosquitto_pub -h localhost -p 1884 -t "status/node2" -m "online" -r
-
-# Subscribe on node1 (should receive retained message)
-mosquitto_sub -h localhost -p 1883 -t "status/#" -v
-```
-
-### Node Failure
-```bash
-# Stop node2
-docker compose stop node2
-
-# Messages should still flow between node1 and node3
-mosquitto_pub -h localhost -p 1885 -t "test/failover" -m "still working"
+curl localhost:9090/health   # Returns "OK"
+curl localhost:9090/metrics  # Prometheus metrics
 ```
 
 ### Scaling
 ```bash
-# Scale up
-docker compose up -d --scale node2=3
+# Kubernetes
+kubectl scale deployment vibemq --replicas=5
 
-# Scale down
-docker compose up -d --scale node2=1
+# Docker Compose
+docker compose up -d --scale vibemq=5
 ```
+
+## Files
+
+| File | Description |
+|------|-------------|
+| `compose.yml` | Docker Compose with HAProxy + 3 VibeMQ nodes |
+| `haproxy.cfg` | HAProxy config with PROXY protocol and health checks |
+| `config.toml` | VibeMQ cluster config (shared by all nodes) |
+| `kubernetes.yaml` | K8s Deployment, Services, HPA, ConfigMap |
+| `kind-config.yaml` | Kind cluster config with port mappings |

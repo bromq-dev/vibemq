@@ -29,9 +29,13 @@ pub use cluster::ClusterConfig;
 // Re-export metrics config types
 pub use metrics::MetricsConfig;
 
+// Re-export proxy protocol config types
+pub use proxy::ProxyProtocolConfig;
+
 mod bridge;
 mod cluster;
 mod metrics;
+mod proxy;
 
 /// Substitute environment variables in a string.
 /// Supports `${VAR}` and `${VAR:-default}` syntax.
@@ -163,6 +167,15 @@ pub struct ServerConfig {
     /// TLS configuration (required when tls_bind is set)
     #[serde(default)]
     pub tls: Option<ServerTlsConfig>,
+    /// PROXY protocol configuration for TCP listener
+    #[serde(default)]
+    pub proxy_protocol: ProxyProtocolConfig,
+    /// PROXY protocol configuration for TLS listener
+    #[serde(default)]
+    pub tls_proxy_protocol: ProxyProtocolConfig,
+    /// PROXY protocol configuration for WebSocket listener
+    #[serde(default)]
+    pub ws_proxy_protocol: ProxyProtocolConfig,
 }
 
 /// TLS configuration for the server
@@ -196,6 +209,9 @@ impl Default for ServerConfig {
             ws_path: default_ws_path(),
             workers: 0,
             tls: None,
+            proxy_protocol: ProxyProtocolConfig::default(),
+            tls_proxy_protocol: ProxyProtocolConfig::default(),
+            ws_proxy_protocol: ProxyProtocolConfig::default(),
         }
     }
 }

@@ -2,7 +2,7 @@
 #
 # This deploys a clustered VibeMQ with:
 # - Headless service for internal cluster discovery (gossip)
-# - LoadBalancer service for MQTT clients
+# - LoadBalancer service for MQTT clients with PROXY protocol
 # - HPA for autoscaling based on CPU
 # - Prometheus metrics endpoint for observability
 #
@@ -35,7 +35,10 @@ spec:
       port: 7947
 
 ---
-# NodePort for MQTT clients (accessible on host)
+# Service for MQTT clients
+# For cloud deployments, change to LoadBalancer with PROXY protocol annotations:
+#   service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+#   service.beta.kubernetes.io/aws-load-balancer-proxy-protocol: "*"
 apiVersion: v1
 kind: Service
 metadata:
@@ -51,6 +54,10 @@ spec:
       port: 1883
       targetPort: 1883
       nodePort: 31883
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+      nodePort: 31090
 
 ---
 # ConfigMap for VibeMQ configuration
@@ -64,7 +71,17 @@ data:
     level = "info"
 
     [auth]
+    enabled = false
     allow_anonymous = true
+
+    [acl]
+    enabled = false
+
+    # PROXY protocol for cloud load balancers (disabled for local/kind testing)
+    # Enable when using AWS NLB, GCP, or other L4 LB with PROXY protocol
+    # [server.proxy_protocol]
+    # enabled = true
+    # timeout = 5
 
     [[cluster]]
     enabled = true
@@ -102,7 +119,9 @@ spec:
     spec:
       containers:
         - name: vibemq
-          image: ghcr.io/vibesrc/vibemq:latest
+          image: vibemq:latest
+          imagePullPolicy: Never # Use local image loaded into kind
+          args: ["-c", "/etc/vibemq/config.toml"]
           ports:
             - name: mqtt
               containerPort: 1883
@@ -123,14 +142,17 @@ spec:
             limits:
               cpu: 500m
               memory: 256Mi
+          # Use HTTP health checks on /health endpoint
           readinessProbe:
-            tcpSocket:
-              port: mqtt
+            httpGet:
+              path: /health
+              port: metrics
             initialDelaySeconds: 2
             periodSeconds: 5
           livenessProbe:
-            tcpSocket:
-              port: mqtt
+            httpGet:
+              path: /health
+              port: metrics
             initialDelaySeconds: 5
             periodSeconds: 10
       volumes:
