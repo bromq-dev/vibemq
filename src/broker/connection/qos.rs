@@ -74,8 +74,9 @@ where
         self.stream.write_all(&self.write_buf).await?;
 
         // Now route the message to subscribers (QoS 2 delivery complete)
+        // Note: No raw_bytes here since message was stored during incoming QoS 2 flow
         if let Some(publish) = publish {
-            self.route_message(client_id, &publish).await?;
+            self.route_message(client_id, &publish, None).await?;
         }
 
         Ok(())
@@ -103,6 +104,13 @@ where
 
         // Info needed for retry, extracted to avoid holding lock during I/O
         enum RetryInfo {
+            /// Zero-copy raw: use write_to with dup=true
+            Raw {
+                packet_id: u16,
+                raw: Arc<crate::codec::RawPublish>,
+                qos: QoS,
+                retain: bool,
+            },
             /// Pre-serialized: use write_to with dup=true
             Cached {
                 packet_id: u16,
@@ -138,6 +146,14 @@ where
                             _ => {
                                 // QoS 1 or QoS 2 waiting for PUBREC: resend PUBLISH
                                 match inflight {
+                                    InflightMessage::Raw { raw, qos, retain, .. } => {
+                                        Some(RetryInfo::Raw {
+                                            packet_id: *packet_id,
+                                            raw: raw.clone(),
+                                            qos: *qos,
+                                            retain: *retain,
+                                        })
+                                    }
                                     InflightMessage::Cached { cached, qos, retain, .. } => {
                                         Some(RetryInfo::Cached {
                                             packet_id: *packet_id,
@@ -171,6 +187,16 @@ where
         // Send retries
         for info in to_retry {
             match info {
+                RetryInfo::Raw { packet_id, raw, qos, retain } => {
+                    // Zero-copy path: use raw bytes with dup=true
+                    self.write_buf.clear();
+                    raw.write_to(&mut self.write_buf, Some(packet_id), qos, retain, true);
+
+                    if self.write_buf.len() <= max_packet_size as usize {
+                        trace!("Retrying PUBLISH (raw) packet_id={}", packet_id);
+                        self.stream.write_all(&self.write_buf).await?;
+                    }
+                }
                 RetryInfo::Cached { packet_id, cached, qos, retain } => {
                     // Fast path: use pre-serialized bytes with dup=true
                     self.write_buf.clear();

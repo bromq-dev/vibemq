@@ -10,7 +10,7 @@ mod encode;
 #[cfg(test)]
 mod tests;
 
-pub use cached::{CachedPublish, PublishCache};
+pub use cached::{CachedPublish, PublishCache, RawPublish};
 pub use decode::Decoder;
 pub use encode::Encoder;
 

@@ -8,13 +8,13 @@ use dashmap::DashMap;
 use parking_lot::RwLock;
 use smallvec::SmallVec;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::broadcast;
 use tracing::debug;
 
 use super::{Connection, ConnectionError};
-use crate::broker::{BrokerEvent, OutboundMessage, RetainedMessage};
+use crate::broker::{BrokerEvent, RetainedMessage, SharedWriter};
 use crate::persistence::{PersistenceOp, StoredRetainedMessage, StoredSession};
-use crate::protocol::{Packet, Publish, QoS};
+use crate::protocol::{Publish, QoS};
 use crate::session::{QueueResult, Session, SessionStore};
 use crate::topic::SubscriptionStore;
 
@@ -201,8 +201,8 @@ where
                         }
                     }
 
-                    // Route will message
-                    let _ = self.route_message(client_id, &publish).await;
+                    // Route will message (no raw bytes - will message is constructed)
+                    let _ = self.route_message(client_id, &publish, None).await;
 
                     // Clear will from session (only when publishing immediately)
                     {
@@ -247,7 +247,7 @@ where
 /// Performance: Uses AHashMap for deduplication and SmallVec for subscription IDs
 pub(crate) async fn route_will_message(
     subscriptions: &SubscriptionStore,
-    connections: &DashMap<Arc<str>, mpsc::Sender<OutboundMessage>>,
+    connections: &DashMap<Arc<str>, Arc<SharedWriter>>,
     sessions: &SessionStore,
     events: &broadcast::Sender<BrokerEvent>,
     sender_id: &Arc<str>,
@@ -314,8 +314,13 @@ pub(crate) async fn route_will_message(
             outgoing.properties.subscription_identifiers.push(id);
         }
 
-        if let Some(sender) = connections.get(&client_id) {
-            let _ = sender.try_send(OutboundMessage::Packet(Packet::Publish(outgoing)));
+        if let Some(writer) = connections.get(&client_id) {
+            let effective_retain = if sub_info.retain_as_published {
+                outgoing.retain
+            } else {
+                false
+            };
+            let _ = writer.send_publish(&mut outgoing, effective_qos, effective_retain);
         } else {
             // Client disconnected, queue message if persistent session
             if let Some(session) = sessions.get(client_id.as_ref()) {

@@ -7,10 +7,12 @@ mod connection;
 mod router;
 mod sys_topics;
 mod tls;
+mod writer;
 
 pub use connection::Connection;
 pub use router::MessageRouter;
 pub use tls::load_tls_config;
+pub use writer::{SendError, SharedWriter};
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -21,7 +23,7 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::broadcast;
 use tracing::{debug, error, info};
 
 /// TCP listen backlog size - high value for burst connection handling
@@ -233,8 +235,8 @@ pub struct Broker {
     subscriptions: Arc<SubscriptionStore>,
     /// Retained messages
     retained: Arc<DashMap<String, RetainedMessage>>,
-    /// Active connections (client_id -> connection handle)
-    connections: Arc<DashMap<Arc<str>, mpsc::Sender<OutboundMessage>>>,
+    /// Active connections (client_id -> shared writer for direct writes)
+    connections: Arc<DashMap<Arc<str>, Arc<SharedWriter>>>,
     /// Shutdown signal
     shutdown: broadcast::Sender<()>,
     /// Event channel
@@ -424,10 +426,9 @@ impl Broker {
                 for (client_id, sub_qos) in client_qos {
                     let effective_qos = qos.min(sub_qos);
 
-                    if let Some(sender) = connections.get(&client_id) {
+                    if let Some(writer) = connections.get(&client_id) {
                         let mut publish = publish.clone();
-                        publish.qos = effective_qos;
-                        match sender.try_send(OutboundMessage::Packet(Packet::Publish(publish))) {
+                        match writer.send_publish(&mut publish, effective_qos, false) {
                             Ok(()) => {
                                 debug!("Cluster inbound_callback: sent to client {}", client_id)
                             }
@@ -526,10 +527,9 @@ impl Broker {
                 for (client_id, sub_qos) in client_qos {
                     let effective_qos = qos.min(sub_qos);
 
-                    if let Some(sender) = connections.get(&client_id) {
+                    if let Some(writer) = connections.get(&client_id) {
                         let mut publish = publish.clone();
-                        publish.qos = effective_qos;
-                        let _ = sender.try_send(OutboundMessage::Packet(Packet::Publish(publish)));
+                        let _ = writer.send_publish(&mut publish, effective_qos, false);
                     } else {
                         // Client disconnected, queue message if persistent session
                         if let Some(session) = sessions.get(client_id.as_ref()) {
@@ -1288,12 +1288,10 @@ impl Broker {
         for (client_id, sub_qos) in client_qos {
             let effective_qos = qos.min(sub_qos);
 
-            if let Some(sender) = self.connections.get(&client_id) {
+            if let Some(writer) = self.connections.get(&client_id) {
                 let mut publish = publish.clone();
-                publish.qos = effective_qos;
-
-                // For QoS > 0, packet_id will be assigned by the connection handler
-                let _ = sender.try_send(OutboundMessage::Packet(Packet::Publish(publish)));
+                // SharedWriter handles packet_id assignment and inflight tracking
+                let _ = writer.send_publish(&mut publish, effective_qos, false);
             } else {
                 // Client disconnected, queue message if persistent session
                 if let Some(session) = self.sessions.get(client_id.as_ref()) {
@@ -1324,7 +1322,7 @@ fn spawn_connection_handler(
     sessions: Arc<SessionStore>,
     subscriptions: Arc<SubscriptionStore>,
     retained: Arc<DashMap<String, RetainedMessage>>,
-    connections: Arc<DashMap<Arc<str>, mpsc::Sender<OutboundMessage>>>,
+    connections: Arc<DashMap<Arc<str>, Arc<SharedWriter>>>,
     config: BrokerConfig,
     events: broadcast::Sender<BrokerEvent>,
     hooks: Arc<dyn Hooks>,

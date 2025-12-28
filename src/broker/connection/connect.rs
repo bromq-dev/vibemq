@@ -8,7 +8,7 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tracing::{debug, error, trace};
 
 use super::{BytesMutExt, Connection, ConnectionError, State};
-use crate::broker::{BrokerEvent, OutboundMessage};
+use crate::broker::BrokerEvent;
 use crate::codec::CachedPublish;
 use crate::protocol::{
     ConnAck, Disconnect, Packet, Properties, ProtocolVersion, PubRel, QoS, ReasonCode,
@@ -209,12 +209,12 @@ where
 
         // Check for existing connection and disconnect it
         if let Some(existing) = self.connections.get(&client_id) {
-            // Send disconnect to existing connection
+            // Send disconnect to existing connection via SharedWriter
             let disconnect = Packet::Disconnect(Disconnect {
                 reason_code: ReasonCode::SessionTakenOver,
                 properties: Properties::default(),
             });
-            let _ = existing.try_send(OutboundMessage::Packet(disconnect));
+            let _ = existing.send_packet(&disconnect);
         }
 
         // Get or create session
@@ -290,9 +290,20 @@ where
             s.touch();
         }
 
-        // Register connection
-        self.connections
-            .insert(client_id.clone(), self.packet_tx.clone());
+        // Create SharedWriter for direct writes (bypasses channel overhead)
+        let max_packet_size = {
+            let s = session.read();
+            s.max_packet_size
+        };
+        let shared_writer = Arc::new(crate::broker::SharedWriter::new(
+            session.clone(),
+            protocol_version,
+            max_packet_size,
+        ));
+
+        // Register connection with SharedWriter
+        self.connections.insert(client_id.clone(), shared_writer.clone());
+        self.shared_writer = Some(shared_writer);
 
         // Send CONNACK
         let mut connack = ConnAck {
@@ -465,6 +476,13 @@ where
     ) -> Result<(), ConnectionError> {
         // Info needed for resend, extracted to avoid holding lock during I/O
         enum ResendInfo {
+            /// Zero-copy raw: use write_to with dup=true
+            Raw {
+                packet_id: u16,
+                raw: Arc<crate::codec::RawPublish>,
+                qos: QoS,
+                retain: bool,
+            },
             /// Pre-serialized: use write_to with dup=true
             Cached {
                 packet_id: u16,
@@ -499,6 +517,14 @@ where
                         _ => {
                             // QoS 1 or QoS 2 waiting for PUBREC: resend PUBLISH
                             match inflight {
+                                InflightMessage::Raw { raw, qos, retain, .. } => {
+                                    ResendInfo::Raw {
+                                        packet_id: *packet_id,
+                                        raw: raw.clone(),
+                                        qos: *qos,
+                                        retain: *retain,
+                                    }
+                                }
                                 InflightMessage::Cached { cached, qos, retain, .. } => {
                                     ResendInfo::Cached {
                                         packet_id: *packet_id,
@@ -523,6 +549,19 @@ where
 
         for info in to_resend {
             match info {
+                ResendInfo::Raw { packet_id, raw, qos, retain } => {
+                    // Zero-copy path: use raw bytes with dup=true
+                    self.write_buf.clear();
+                    raw.write_to(&mut self.write_buf, Some(packet_id), qos, retain, true);
+
+                    if self.write_buf.len() <= max_packet_size as usize {
+                        trace!(
+                            "Resending inflight PUBLISH (raw) packet_id={} with DUP=1",
+                            packet_id
+                        );
+                        self.stream.write_all(&self.write_buf).await?;
+                    }
+                }
                 ResendInfo::Cached { packet_id, cached, qos, retain } => {
                     // Fast path: use pre-serialized bytes with dup=true
                     self.write_buf.clear();

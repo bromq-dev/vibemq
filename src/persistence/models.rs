@@ -319,8 +319,8 @@ impl StoredInflightMessage {
                     retry_count: *retry_count,
                 })
             }
-            InflightMessage::Cached { .. } => {
-                // Cached variants don't have the original Publish data
+            InflightMessage::Cached { .. } | InflightMessage::Raw { .. } => {
+                // Cached/Raw variants don't have the original Publish data
                 // They won't be persisted; on reconnect, publisher will retry
                 None
             }

@@ -20,7 +20,7 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use parking_lot::RwLock;
 
-use crate::codec::CachedPublish;
+use crate::codec::{CachedPublish, RawPublish};
 use crate::protocol::{Properties, ProtocolVersion, Publish, QoS, SubscriptionOptions};
 
 /// A pending message with timestamp for expiry tracking
@@ -45,11 +45,22 @@ pub enum SessionState {
 
 /// Inflight message state for QoS 1/2
 ///
-/// Supports two modes:
-/// - Cached: Pre-serialized bytes for efficient retransmission (most cases)
+/// Supports three modes:
+/// - Raw: Zero-copy from incoming wire bytes (fastest)
+/// - Cached: Pre-serialized bytes for efficient retransmission
 /// - Full: Original Publish for complex cases (subscription IDs in properties)
 #[derive(Debug, Clone)]
 pub enum InflightMessage {
+    /// Zero-copy from incoming wire bytes
+    Raw {
+        packet_id: u16,
+        raw: Arc<RawPublish>,
+        qos: QoS,
+        retain: bool,
+        qos2_state: Option<Qos2State>,
+        sent_at: Instant,
+        retry_count: u32,
+    },
     /// Pre-serialized for efficient retransmission
     Cached {
         packet_id: u16,
@@ -74,6 +85,7 @@ impl InflightMessage {
     /// Get the packet ID
     pub fn packet_id(&self) -> u16 {
         match self {
+            InflightMessage::Raw { packet_id, .. } => *packet_id,
             InflightMessage::Cached { packet_id, .. } => *packet_id,
             InflightMessage::Full { packet_id, .. } => *packet_id,
         }
@@ -82,6 +94,7 @@ impl InflightMessage {
     /// Get the QoS level
     pub fn qos(&self) -> QoS {
         match self {
+            InflightMessage::Raw { qos, .. } => *qos,
             InflightMessage::Cached { qos, .. } => *qos,
             InflightMessage::Full { publish, .. } => publish.qos,
         }
@@ -90,6 +103,7 @@ impl InflightMessage {
     /// Get mutable reference to QoS 2 state
     pub fn qos2_state_mut(&mut self) -> &mut Option<Qos2State> {
         match self {
+            InflightMessage::Raw { qos2_state, .. } => qos2_state,
             InflightMessage::Cached { qos2_state, .. } => qos2_state,
             InflightMessage::Full { qos2_state, .. } => qos2_state,
         }
@@ -98,6 +112,7 @@ impl InflightMessage {
     /// Get the sent timestamp
     pub fn sent_at(&self) -> Instant {
         match self {
+            InflightMessage::Raw { sent_at, .. } => *sent_at,
             InflightMessage::Cached { sent_at, .. } => *sent_at,
             InflightMessage::Full { sent_at, .. } => *sent_at,
         }
@@ -106,6 +121,7 @@ impl InflightMessage {
     /// Get mutable reference to retry count
     pub fn retry_count_mut(&mut self) -> &mut u32 {
         match self {
+            InflightMessage::Raw { retry_count, .. } => retry_count,
             InflightMessage::Cached { retry_count, .. } => retry_count,
             InflightMessage::Full { retry_count, .. } => retry_count,
         }
@@ -114,15 +130,17 @@ impl InflightMessage {
     /// Update sent_at timestamp
     pub fn touch(&mut self) {
         match self {
+            InflightMessage::Raw { sent_at, .. } => *sent_at = Instant::now(),
             InflightMessage::Cached { sent_at, .. } => *sent_at = Instant::now(),
             InflightMessage::Full { sent_at, .. } => *sent_at = Instant::now(),
         }
     }
 
     /// Get the Publish data if available (Full variant only)
-    /// Used for persistence - Cached variants aren't persisted
+    /// Used for persistence - Raw and Cached variants aren't persisted as Publish
     pub fn publish(&self) -> Option<&Publish> {
         match self {
+            InflightMessage::Raw { .. } => None,
             InflightMessage::Cached { .. } => None,
             InflightMessage::Full { publish, .. } => Some(publish),
         }
@@ -131,6 +149,7 @@ impl InflightMessage {
     /// Get QoS 2 state (immutable reference)
     pub fn qos2_state(&self) -> Option<Qos2State> {
         match self {
+            InflightMessage::Raw { qos2_state, .. } => *qos2_state,
             InflightMessage::Cached { qos2_state, .. } => *qos2_state,
             InflightMessage::Full { qos2_state, .. } => *qos2_state,
         }
@@ -139,6 +158,7 @@ impl InflightMessage {
     /// Get the retry count
     pub fn retry_count(&self) -> u32 {
         match self {
+            InflightMessage::Raw { retry_count, .. } => *retry_count,
             InflightMessage::Cached { retry_count, .. } => *retry_count,
             InflightMessage::Full { retry_count, .. } => *retry_count,
         }

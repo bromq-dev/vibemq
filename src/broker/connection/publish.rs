@@ -12,9 +12,10 @@ use tracing::{debug, error, trace, warn};
 
 // Thread-local dedup map for route_message to avoid per-publish allocation.
 // Key: client_id, Value: aggregated subscription info
+// Capacity 256 reduces reallocations for moderate fan-outs
 thread_local! {
     static DEDUP_MAP: RefCell<AHashMap<Arc<str>, ClientSub>> =
-        RefCell::new(AHashMap::with_capacity(64));
+        RefCell::new(AHashMap::with_capacity(256));
 }
 
 /// Aggregated subscription info for a single client during message routing
@@ -25,8 +26,8 @@ struct ClientSub {
 }
 
 use super::{Connection, ConnectionError};
-use crate::broker::{BrokerEvent, OutboundMessage, RetainedMessage};
-use crate::codec::PublishCache;
+use crate::broker::{BrokerEvent, RetainedMessage};
+use crate::codec::{PublishCache, RawPublish};
 use crate::persistence::{PersistenceOp, StoredRetainedMessage};
 use crate::protocol::{Packet, Properties, ProtocolVersion, PubAck, PubRec, Publish, QoS, ReasonCode};
 use crate::session::{QueueResult, Session};
@@ -42,6 +43,7 @@ where
         client_id: &Arc<str>,
         session: &Arc<RwLock<Session>>,
         mut publish: Publish,
+        mut raw_bytes: Option<bytes::Bytes>,
     ) -> Result<(), ConnectionError> {
         // Validate topic name
         if let Err(e) =
@@ -76,7 +78,8 @@ where
         // Handle topic alias (v5.0)
         if let Some(alias) = publish.properties.topic_alias {
             if publish.topic.is_empty() {
-                // Lookup alias
+                // Lookup alias - raw bytes no longer valid (topic resolved from alias)
+                raw_bytes = None;
                 let s = session.read();
                 if let Some(topic) = s.resolve_topic_alias(alias) {
                     publish.topic = Arc::from(topic.as_str());
@@ -284,23 +287,29 @@ where
         }
 
         // Route message to subscribers
-        self.route_message(client_id, &publish).await?;
+        self.route_message(client_id, &publish, raw_bytes).await?;
 
         Ok(())
     }
 
     /// Route a message to subscribers
     /// Uses thread-local AHashMap for O(n) deduplication, avoiding per-publish allocation.
-    /// Uses CachedPublish for QoS 0 messages (pre-serialized bytes with memcpy + patch).
+    /// Uses RawPublish for zero-copy fan-out when raw_bytes available, falls back to CachedPublish.
     pub(crate) async fn route_message(
         &self,
         sender_id: &Arc<str>,
         publish: &Publish,
+        raw_bytes: Option<bytes::Bytes>,
     ) -> Result<(), ConnectionError> {
         let matches = self.subscriptions.matches(&publish.topic);
 
-        // Pre-serialize for QoS 0 fan-out optimization.
-        // Create cache lazily only if we have subscribers.
+        // Create RawPublish for zero-copy fan-out if we have raw bytes
+        let raw_publish: Option<std::sync::Arc<RawPublish>> = raw_bytes.and_then(|bytes| {
+            let version = self.decoder.protocol_version().unwrap_or(ProtocolVersion::V311);
+            RawPublish::from_wire(bytes, version).ok().map(std::sync::Arc::new)
+        });
+
+        // Fallback cache for re-encoding (used when raw bytes not available or protocol mismatch)
         let mut publish_cache: Option<PublishCache> = None;
 
         // Use thread-local map for deduplication (reused across publishes)
@@ -363,33 +372,40 @@ where
                 // (subscription IDs are encoded in properties and can't be patched)
                 let can_use_cached = sub_info.subscription_ids.is_empty();
 
-                if let Some(sender) = self.connections.get(&client_id) {
+                if let Some(writer) = self.connections.get(&client_id) {
                     if can_use_cached {
-                        // Fast path: pre-serialized bytes
-                        // Get protocol version from session for proper cache selection
-                        let version = self.sessions
-                            .get(client_id.as_ref())
-                            .map(|s| s.read().protocol_version)
-                            .unwrap_or(ProtocolVersion::V311);
+                        // Fast path: pre-serialized bytes with direct write
+                        // Get protocol version directly from SharedWriter (no lock needed)
+                        let version = writer.protocol_version();
 
+                        // Try zero-copy path first (RawPublish from incoming wire bytes)
+                        if let Some(ref raw) = raw_publish {
+                            // Use RawPublish if protocol version matches and QoS is supported
+                            if raw.protocol_version() == version && raw.supports_qos(effective_qos) {
+                                if let Err(e) = writer.send_raw(raw, effective_qos, effective_retain) {
+                                    trace!(client_id = %client_id, error = ?e, "send_raw failed");
+                                }
+                                continue;
+                            }
+                        }
+
+                        // Fallback to CachedPublish (re-encode)
+                        if publish_cache.is_none() {
+                            publish_cache = Some(PublishCache::new());
+                        }
                         if let Some(ref mut cache) = publish_cache {
                             // Use appropriate cache based on QoS
+                            // get_or_create returns Arc clone (atomic increment, no allocation)
                             let cached_result = if effective_qos == QoS::AtMostOnce {
                                 cache.get_or_create_qos0(publish, version)
                             } else {
                                 cache.get_or_create(publish, version)
                             };
 
-                            if let Ok(cached) = cached_result {
-                                let msg = OutboundMessage::CachedPublish {
-                                    cached: Arc::new(cached.clone()),
-                                    qos: effective_qos,
-                                    retain: effective_retain,
-                                };
-                                if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) =
-                                    sender.try_send(msg)
-                                {
-                                    warn!(client_id = %client_id, "channel full - dropping message");
+                            if let Ok(cached_arc) = cached_result {
+                                // Direct write to shared buffer (no channel overhead)
+                                if let Err(e) = writer.send_cached(&cached_arc, effective_qos, effective_retain) {
+                                    trace!(client_id = %client_id, error = ?e, "send_cached failed");
                                 }
                                 continue;
                             }
@@ -398,20 +414,15 @@ where
 
                     // Fallback path: clone and modify Publish (subscription IDs present)
                     let mut outgoing = publish.clone();
-                    outgoing.qos = effective_qos;
-                    outgoing.dup = false;
-                    outgoing.packet_id = None;
-                    outgoing.retain = effective_retain;
 
                     // Add ALL subscription identifiers
                     for id in &sub_info.subscription_ids {
                         outgoing.properties.subscription_identifiers.push(*id);
                     }
 
-                    if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) =
-                        sender.try_send(OutboundMessage::Packet(Packet::Publish(outgoing)))
-                    {
-                        warn!(client_id = %client_id, "channel full - dropping message");
+                    // Direct write with full publish encoding
+                    if let Err(e) = writer.send_publish(&mut outgoing, effective_qos, effective_retain) {
+                        trace!(client_id = %client_id, error = ?e, "send_publish failed");
                     }
                 } else {
                     // Client disconnected, queue message if persistent session
