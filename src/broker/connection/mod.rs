@@ -331,7 +331,10 @@ where
                     crate::protocol::ProtocolError::ProtocolViolation("duplicate CONNECT"),
                 ))
             }
-            Packet::Publish(publish) => self.handle_publish(client_id, session, publish, raw_bytes).await,
+            Packet::Publish(publish) => {
+                self.handle_publish(client_id, session, publish, raw_bytes)
+                    .await
+            }
             Packet::PubAck(puback) => self.handle_puback(session, puback).await,
             Packet::PubRec(pubrec) => self.handle_pubrec(session, pubrec).await,
             Packet::PubRel(pubrel) => self.handle_pubrel(client_id, session, pubrel).await,

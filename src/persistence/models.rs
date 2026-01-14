@@ -313,7 +313,7 @@ impl StoredInflightMessage {
 
                 Some(Self {
                     packet_id: *packet_id,
-                    publish: StoredPublish::from(publish),
+                    publish: StoredPublish::from(publish.as_ref()),
                     qos2_state: qos2_state_code,
                     sent_at_secs: instant_to_unix_secs(*sent_at),
                     retry_count: *retry_count,
@@ -339,7 +339,7 @@ impl From<StoredInflightMessage> for InflightMessage {
         // Always load as Full variant from storage
         InflightMessage::Full {
             packet_id: stored.packet_id,
-            publish: Publish::from(stored.publish),
+            publish: Box::new(Publish::from(stored.publish)),
             qos2_state,
             sent_at: unix_secs_to_instant(stored.sent_at_secs),
             retry_count: stored.retry_count,

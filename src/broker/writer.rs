@@ -191,12 +191,7 @@ impl SharedWriter {
     /// For QoS 1/2: Assigns packet_id, stores in inflight, then appends bytes.
     ///
     /// Returns Ok(()) on success, or an error if flow control limits are exceeded.
-    pub fn send_raw(
-        &self,
-        raw: &Arc<RawPublish>,
-        qos: QoS,
-        retain: bool,
-    ) -> Result<(), SendError> {
+    pub fn send_raw(&self, raw: &Arc<RawPublish>, qos: QoS, retain: bool) -> Result<(), SendError> {
         if !self.is_alive() {
             return Err(SendError::Closed);
         }
@@ -342,7 +337,7 @@ impl SharedWriter {
                 pid,
                 InflightMessage::Full {
                     packet_id: pid,
-                    publish: publish.clone(),
+                    publish: Box::new(publish.clone()),
                     qos2_state: if effective_qos == QoS::ExactlyOnce {
                         Some(Qos2State::WaitingPubRec)
                     } else {

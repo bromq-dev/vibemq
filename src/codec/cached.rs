@@ -114,7 +114,10 @@ impl CachedPublish {
     /// This is more efficient when the source is QoS 0 and all subscribers
     /// are also QoS 0.
     #[allow(dead_code)] // May be used for QoS 0 optimization in the future
-    pub fn new_qos0(publish: &Publish, protocol_version: ProtocolVersion) -> Result<Self, EncodeError> {
+    pub fn new_qos0(
+        publish: &Publish,
+        protocol_version: ProtocolVersion,
+    ) -> Result<Self, EncodeError> {
         let is_v5 = protocol_version == ProtocolVersion::V5;
 
         // QoS 0 has no packet_id
@@ -253,7 +256,10 @@ impl RawPublish {
     ///
     /// Parses just enough to find the offsets, no allocations.
     /// The bytes should be a complete PUBLISH packet including fixed header.
-    pub fn from_wire(bytes: Bytes, protocol_version: ProtocolVersion) -> Result<Self, super::super::protocol::DecodeError> {
+    pub fn from_wire(
+        bytes: Bytes,
+        protocol_version: ProtocolVersion,
+    ) -> Result<Self, super::super::protocol::DecodeError> {
         use crate::protocol::DecodeError;
 
         if bytes.is_empty() {
@@ -408,7 +414,10 @@ impl PublishCache {
         };
 
         if slot.is_none() {
-            *slot = Some(std::sync::Arc::new(CachedPublish::new(publish, protocol_version)?));
+            *slot = Some(std::sync::Arc::new(CachedPublish::new(
+                publish,
+                protocol_version,
+            )?));
         }
 
         Ok(slot.as_ref().unwrap().clone())
@@ -427,7 +436,10 @@ impl PublishCache {
         };
 
         if slot.is_none() {
-            *slot = Some(std::sync::Arc::new(CachedPublish::new_qos0(publish, protocol_version)?));
+            *slot = Some(std::sync::Arc::new(CachedPublish::new_qos0(
+                publish,
+                protocol_version,
+            )?));
         }
 
         Ok(slot.as_ref().unwrap().clone())
@@ -462,7 +474,7 @@ mod tests {
         // Decode and verify
         let mut decoder = Decoder::new();
         decoder.set_protocol_version(ProtocolVersion::V311);
-        let (decoded, _) = decoder.decode(&mut buf).unwrap().unwrap();
+        let (decoded, _) = decoder.decode(&buf).unwrap().unwrap();
 
         if let crate::protocol::Packet::Publish(p) = decoded {
             assert_eq!(&*p.topic, "test/topic");
@@ -495,7 +507,7 @@ mod tests {
 
             let mut decoder = Decoder::new();
             decoder.set_protocol_version(ProtocolVersion::V311);
-            let (decoded, _) = decoder.decode(&mut buf).unwrap().unwrap();
+            let (decoded, _) = decoder.decode(&buf).unwrap().unwrap();
 
             if let crate::protocol::Packet::Publish(p) = decoded {
                 assert_eq!(p.packet_id, Some(pid));
@@ -525,7 +537,7 @@ mod tests {
 
         let mut decoder = Decoder::new();
         decoder.set_protocol_version(ProtocolVersion::V311);
-        let (decoded, _) = decoder.decode(&mut buf).unwrap().unwrap();
+        let (decoded, _) = decoder.decode(&buf).unwrap().unwrap();
 
         if let crate::protocol::Packet::Publish(p) = decoded {
             assert!(p.retain);
@@ -538,7 +550,7 @@ mod tests {
         let mut buf = BytesMut::new();
         cached.write_to(&mut buf, Some(1), QoS::AtLeastOnce, false, true);
 
-        let (decoded, _) = decoder.decode(&mut buf).unwrap().unwrap();
+        let (decoded, _) = decoder.decode(&buf).unwrap().unwrap();
 
         if let crate::protocol::Packet::Publish(p) = decoded {
             assert!(!p.retain);
@@ -550,9 +562,11 @@ mod tests {
 
     #[test]
     fn test_cached_publish_v5_with_properties() {
-        let mut props = Properties::default();
-        props.message_expiry_interval = Some(3600);
-        props.content_type = Some("application/json".to_string());
+        let props = Properties {
+            message_expiry_interval: Some(3600),
+            content_type: Some("application/json".to_string()),
+            ..Default::default()
+        };
 
         let publish = Publish {
             dup: false,
@@ -571,12 +585,15 @@ mod tests {
 
         let mut decoder = Decoder::new();
         decoder.set_protocol_version(ProtocolVersion::V5);
-        let (decoded, _) = decoder.decode(&mut buf).unwrap().unwrap();
+        let (decoded, _) = decoder.decode(&buf).unwrap().unwrap();
 
         if let crate::protocol::Packet::Publish(p) = decoded {
             assert_eq!(&*p.topic, "data/stream");
             assert_eq!(p.properties.message_expiry_interval, Some(3600));
-            assert_eq!(p.properties.content_type, Some("application/json".to_string()));
+            assert_eq!(
+                p.properties.content_type,
+                Some("application/json".to_string())
+            );
         } else {
             panic!("Expected Publish packet");
         }

@@ -302,7 +302,8 @@ where
         ));
 
         // Register connection with SharedWriter
-        self.connections.insert(client_id.clone(), shared_writer.clone());
+        self.connections
+            .insert(client_id.clone(), shared_writer.clone());
         self.shared_writer = Some(shared_writer);
 
         // Send CONNACK
@@ -426,7 +427,7 @@ where
                         packet_id,
                         InflightMessage::Full {
                             packet_id,
-                            publish: publish.clone(),
+                            publish: Box::new(publish.clone()),
                             qos2_state: if publish.qos == QoS::ExactlyOnce {
                                 Some(Qos2State::WaitingPubRec)
                             } else {
@@ -493,7 +494,7 @@ where
             /// Full publish: encode with dup=true
             Full {
                 packet_id: u16,
-                publish: crate::protocol::Publish,
+                publish: Box<crate::protocol::Publish>,
             },
             /// QoS 2 waiting for PUBCOMP: resend PUBREL
             PubRel { packet_id: u16 },
@@ -511,34 +512,35 @@ where
 
                     // Check QoS 2 state - if waiting for PUBCOMP, resend PUBREL
                     match inflight.qos2_state() {
-                        Some(Qos2State::WaitingPubComp) => {
-                            ResendInfo::PubRel { packet_id: *packet_id }
-                        }
+                        Some(Qos2State::WaitingPubComp) => ResendInfo::PubRel {
+                            packet_id: *packet_id,
+                        },
                         _ => {
                             // QoS 1 or QoS 2 waiting for PUBREC: resend PUBLISH
                             match inflight {
-                                InflightMessage::Raw { raw, qos, retain, .. } => {
-                                    ResendInfo::Raw {
-                                        packet_id: *packet_id,
-                                        raw: raw.clone(),
-                                        qos: *qos,
-                                        retain: *retain,
-                                    }
-                                }
-                                InflightMessage::Cached { cached, qos, retain, .. } => {
-                                    ResendInfo::Cached {
-                                        packet_id: *packet_id,
-                                        cached: cached.clone(),
-                                        qos: *qos,
-                                        retain: *retain,
-                                    }
-                                }
-                                InflightMessage::Full { publish, .. } => {
-                                    ResendInfo::Full {
-                                        packet_id: *packet_id,
-                                        publish: publish.clone(),
-                                    }
-                                }
+                                InflightMessage::Raw {
+                                    raw, qos, retain, ..
+                                } => ResendInfo::Raw {
+                                    packet_id: *packet_id,
+                                    raw: raw.clone(),
+                                    qos: *qos,
+                                    retain: *retain,
+                                },
+                                InflightMessage::Cached {
+                                    cached,
+                                    qos,
+                                    retain,
+                                    ..
+                                } => ResendInfo::Cached {
+                                    packet_id: *packet_id,
+                                    cached: cached.clone(),
+                                    qos: *qos,
+                                    retain: *retain,
+                                },
+                                InflightMessage::Full { publish, .. } => ResendInfo::Full {
+                                    packet_id: *packet_id,
+                                    publish: publish.clone(),
+                                },
                             }
                         }
                     }
@@ -549,7 +551,12 @@ where
 
         for info in to_resend {
             match info {
-                ResendInfo::Raw { packet_id, raw, qos, retain } => {
+                ResendInfo::Raw {
+                    packet_id,
+                    raw,
+                    qos,
+                    retain,
+                } => {
                     // Zero-copy path: use raw bytes with dup=true
                     self.write_buf.clear();
                     raw.write_to(&mut self.write_buf, Some(packet_id), qos, retain, true);
@@ -562,7 +569,12 @@ where
                         self.stream.write_all(&self.write_buf).await?;
                     }
                 }
-                ResendInfo::Cached { packet_id, cached, qos, retain } => {
+                ResendInfo::Cached {
+                    packet_id,
+                    cached,
+                    qos,
+                    retain,
+                } => {
                     // Fast path: use pre-serialized bytes with dup=true
                     self.write_buf.clear();
                     cached.write_to(&mut self.write_buf, Some(packet_id), qos, retain, true);
@@ -575,14 +587,17 @@ where
                         self.stream.write_all(&self.write_buf).await?;
                     }
                 }
-                ResendInfo::Full { packet_id, mut publish } => {
+                ResendInfo::Full {
+                    packet_id,
+                    mut publish,
+                } => {
                     // Fallback path: encode full publish
                     publish.dup = true;
                     publish.packet_id = Some(packet_id);
 
                     self.write_buf.clear();
                     self.encoder
-                        .encode(&Packet::Publish(publish), &mut self.write_buf)
+                        .encode(&Packet::Publish(*publish), &mut self.write_buf)
                         .map_err(|e| ConnectionError::Protocol(e.into()))?;
 
                     if self.write_buf.len() <= max_packet_size as usize {

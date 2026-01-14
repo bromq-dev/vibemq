@@ -9,7 +9,7 @@ use tracing::trace;
 
 use super::{Connection, ConnectionError};
 use crate::codec::CachedPublish;
-use crate::protocol::{Packet, Publish, PubAck, PubComp, PubRec, PubRel, QoS};
+use crate::protocol::{Packet, PubAck, PubComp, PubRec, PubRel, Publish, QoS};
 use crate::session::{InflightMessage, Qos2State, Session};
 
 impl<S> Connection<S>
@@ -121,7 +121,7 @@ where
             /// Full publish: encode with dup=true
             Full {
                 packet_id: u16,
-                publish: Publish,
+                publish: Box<Publish>,
             },
             /// QoS 2 waiting for PUBCOMP: resend PUBREL
             PubRel { packet_id: u16 },
@@ -140,28 +140,31 @@ where
 
                         // Check QoS 2 state - if waiting for PUBCOMP, resend PUBREL
                         match inflight.qos2_state_mut() {
-                            Some(Qos2State::WaitingPubComp) => {
-                                Some(RetryInfo::PubRel { packet_id: *packet_id })
-                            }
+                            Some(Qos2State::WaitingPubComp) => Some(RetryInfo::PubRel {
+                                packet_id: *packet_id,
+                            }),
                             _ => {
                                 // QoS 1 or QoS 2 waiting for PUBREC: resend PUBLISH
                                 match inflight {
-                                    InflightMessage::Raw { raw, qos, retain, .. } => {
-                                        Some(RetryInfo::Raw {
-                                            packet_id: *packet_id,
-                                            raw: raw.clone(),
-                                            qos: *qos,
-                                            retain: *retain,
-                                        })
-                                    }
-                                    InflightMessage::Cached { cached, qos, retain, .. } => {
-                                        Some(RetryInfo::Cached {
-                                            packet_id: *packet_id,
-                                            cached: cached.clone(),
-                                            qos: *qos,
-                                            retain: *retain,
-                                        })
-                                    }
+                                    InflightMessage::Raw {
+                                        raw, qos, retain, ..
+                                    } => Some(RetryInfo::Raw {
+                                        packet_id: *packet_id,
+                                        raw: raw.clone(),
+                                        qos: *qos,
+                                        retain: *retain,
+                                    }),
+                                    InflightMessage::Cached {
+                                        cached,
+                                        qos,
+                                        retain,
+                                        ..
+                                    } => Some(RetryInfo::Cached {
+                                        packet_id: *packet_id,
+                                        cached: cached.clone(),
+                                        qos: *qos,
+                                        retain: *retain,
+                                    }),
                                     InflightMessage::Full { publish, .. } => {
                                         Some(RetryInfo::Full {
                                             packet_id: *packet_id,
@@ -187,7 +190,12 @@ where
         // Send retries
         for info in to_retry {
             match info {
-                RetryInfo::Raw { packet_id, raw, qos, retain } => {
+                RetryInfo::Raw {
+                    packet_id,
+                    raw,
+                    qos,
+                    retain,
+                } => {
                     // Zero-copy path: use raw bytes with dup=true
                     self.write_buf.clear();
                     raw.write_to(&mut self.write_buf, Some(packet_id), qos, retain, true);
@@ -197,7 +205,12 @@ where
                         self.stream.write_all(&self.write_buf).await?;
                     }
                 }
-                RetryInfo::Cached { packet_id, cached, qos, retain } => {
+                RetryInfo::Cached {
+                    packet_id,
+                    cached,
+                    qos,
+                    retain,
+                } => {
                     // Fast path: use pre-serialized bytes with dup=true
                     self.write_buf.clear();
                     cached.write_to(&mut self.write_buf, Some(packet_id), qos, retain, true);
@@ -207,14 +220,17 @@ where
                         self.stream.write_all(&self.write_buf).await?;
                     }
                 }
-                RetryInfo::Full { packet_id, mut publish } => {
+                RetryInfo::Full {
+                    packet_id,
+                    mut publish,
+                } => {
                     // Fallback path: encode full publish
                     publish.dup = true;
                     publish.packet_id = Some(packet_id);
 
                     self.write_buf.clear();
                     self.encoder
-                        .encode(&Packet::Publish(publish), &mut self.write_buf)
+                        .encode(&Packet::Publish(*publish), &mut self.write_buf)
                         .map_err(|e| ConnectionError::Protocol(e.into()))?;
 
                     if self.write_buf.len() <= max_packet_size as usize {

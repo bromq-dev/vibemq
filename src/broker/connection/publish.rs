@@ -29,7 +29,9 @@ use super::{Connection, ConnectionError};
 use crate::broker::{BrokerEvent, RetainedMessage};
 use crate::codec::{PublishCache, RawPublish};
 use crate::persistence::{PersistenceOp, StoredRetainedMessage};
-use crate::protocol::{Packet, Properties, ProtocolVersion, PubAck, PubRec, Publish, QoS, ReasonCode};
+use crate::protocol::{
+    Packet, Properties, ProtocolVersion, PubAck, PubRec, Publish, QoS, ReasonCode,
+};
 use crate::session::{QueueResult, Session};
 use crate::topic::validate_topic_name_with_max_levels;
 
@@ -305,8 +307,13 @@ where
 
         // Create RawPublish for zero-copy fan-out if we have raw bytes
         let raw_publish: Option<std::sync::Arc<RawPublish>> = raw_bytes.and_then(|bytes| {
-            let version = self.decoder.protocol_version().unwrap_or(ProtocolVersion::V311);
-            RawPublish::from_wire(bytes, version).ok().map(std::sync::Arc::new)
+            let version = self
+                .decoder
+                .protocol_version()
+                .unwrap_or(ProtocolVersion::V311);
+            RawPublish::from_wire(bytes, version)
+                .ok()
+                .map(std::sync::Arc::new)
         });
 
         // Fallback cache for re-encoding (used when raw bytes not available or protocol mismatch)

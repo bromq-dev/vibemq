@@ -62,7 +62,7 @@ pub enum OutboundMessage {
     },
     /// Standard packet requiring full encoding.
     /// Used for non-PUBLISH packets or when subscription_ids are present.
-    Packet(Packet),
+    Packet(Box<Packet>),
 }
 
 /// Broker configuration

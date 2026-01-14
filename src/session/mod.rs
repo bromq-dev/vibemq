@@ -74,7 +74,7 @@ pub enum InflightMessage {
     /// Full publish for complex cases
     Full {
         packet_id: u16,
-        publish: Publish,
+        publish: Box<Publish>,
         qos2_state: Option<Qos2State>,
         sent_at: Instant,
         retry_count: u32,
